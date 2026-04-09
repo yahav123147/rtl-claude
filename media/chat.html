@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="{{csp}}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="{{cssUri}}" />
+  <title>RTL Claude</title>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header-left">
+        <div class="logo">C</div>
+        <div class="header-titles">
+          <div class="title">Claude — צ׳אט עברי</div>
+          <div class="subtitle" id="workspaceLabel">טוען...</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="newConvBtn" class="icon-btn" title="שיחה חדשה" aria-label="שיחה חדשה">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="messages" id="messages">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">💬</div>
+        <h2>שלום! איך אני יכול לעזור?</h2>
+        <p>כתוב לי בעברית. יש לי גישה מלאה לפרויקט שלך — קבצים, פקודות, חיפוש.</p>
+        <div class="hints">
+          <div class="hint"><kbd>⌘⇧H</kbd> פתח את הצ׳אט</div>
+          <div class="hint"><kbd>⌘⇧L</kbd> שלח קוד נבחר</div>
+        </div>
+      </div>
+    </main>
+
+    <footer class="composer">
+      <div id="contextChip" class="context-chip hidden">
+        <span class="context-icon">📎</span>
+        <span class="context-text" id="contextText"></span>
+        <button class="context-remove" id="contextRemove" aria-label="הסר">✕</button>
+      </div>
+
+      <div class="input-row">
+        <textarea
+          id="input"
+          rows="1"
+          placeholder="כתוב הודעה... (Enter לשליחה, Shift+Enter לשורה חדשה)"
+          dir="rtl"
+        ></textarea>
+        <button id="sendBtn" class="send-btn" aria-label="שלח" disabled>
+          <svg class="send-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="19" y1="12" x2="5" y2="12" />
+            <polyline points="12 19 5 12 12 5" />
+          </svg>
+          <svg class="stop-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="6" width="12" height="12" rx="2" />
+          </svg>
+        </button>
+      </div>
+      <div class="composer-hint">Claude יכול לערוך קבצים ולהריץ פקודות. בדוק את הפעולות שלו.</div>
+    </footer>
+  </div>
+
+  <script nonce="{{nonce}}" src="{{markedUri}}"></script>
+  <script nonce="{{nonce}}" src="{{jsUri}}"></script>
+</body>
+</html>

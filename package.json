@@ -1,0 +1,125 @@
+{
+  "name": "rtl-claude",
+  "displayName": "RTL Claude — צ׳אט עברי",
+  "description": "Hebrew RTL chat panel for Claude inside VS Code / Antigravity. Same model, same tools, perfect right-to-left layout.",
+  "version": "0.1.0",
+  "publisher": "yhbrwbyn",
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "keywords": [
+    "claude",
+    "hebrew",
+    "rtl",
+    "ai",
+    "chat"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rtl-claude-sidebar",
+          "title": "RTL Claude",
+          "icon": "media/sidebar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "rtl-claude-sidebar": [
+        {
+          "id": "rtl-claude.chat",
+          "name": "צ׳אט",
+          "type": "webview",
+          "icon": "media/sidebar-icon.svg",
+          "contextualTitle": "RTL Claude"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "rtl-claude.focus",
+        "title": "RTL Claude: Open Chat",
+        "category": "RTL Claude"
+      },
+      {
+        "command": "rtl-claude.newConversation",
+        "title": "RTL Claude: New Conversation",
+        "category": "RTL Claude"
+      },
+      {
+        "command": "rtl-claude.sendSelection",
+        "title": "RTL Claude: Send Selection to Chat",
+        "category": "RTL Claude"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "rtl-claude.focus",
+        "key": "cmd+shift+h",
+        "mac": "cmd+shift+h"
+      },
+      {
+        "command": "rtl-claude.sendSelection",
+        "key": "cmd+shift+l",
+        "mac": "cmd+shift+l",
+        "when": "editorHasSelection"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "rtl-claude.sendSelection",
+          "when": "editorHasSelection",
+          "group": "rtl-claude"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "RTL Claude",
+      "properties": {
+        "rtlClaude.model": {
+          "type": "string",
+          "enum": [
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+            "inherit"
+          ],
+          "default": "claude-opus-4-6",
+          "description": "מודל Claude לשימוש בצ׳אט"
+        },
+        "rtlClaude.maxTurns": {
+          "type": "number",
+          "default": 50,
+          "description": "מספר מקסימלי של turns בכל בקשה"
+        },
+        "rtlClaude.includeActiveFile": {
+          "type": "boolean",
+          "default": true,
+          "description": "כלול אוטומטית את שם הקובץ הפתוח כקונטקסט"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.49"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.94.0",
+    "typescript": "^5.6.0"
+  }
+}
