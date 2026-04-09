@@ -315,6 +315,28 @@
     vscode.postMessage({ type: 'cancel' })
   }
 
+  // Persist messages to workspaceState so they survive window reloads.
+  // Called after each turn completes (streamEnd).
+  function persistMessages() {
+    // Strip transient fields (streaming, expanded) to keep state clean
+    const cleaned = messages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      text: m.text,
+      tools: (m.tools || []).map((t) => ({
+        id: t.id,
+        tool: t.tool,
+        input: t.input,
+        result: t.result,
+        isError: t.isError,
+      })),
+    }))
+    vscode.postMessage({
+      type: 'persistMessages',
+      payload: { messages: cleaned },
+    })
+  }
+
   // ─── Selection / context chip ───────────────────────────────
   let currentSelection = null
 
@@ -365,12 +387,22 @@
         if (msg.payload?.workspaceName) {
           workspaceLabel.textContent = `📁 ${msg.payload.workspaceName}`
         }
+        // Restore saved messages from workspace state
+        if (Array.isArray(msg.payload?.messages) && msg.payload.messages.length > 0) {
+          messages = msg.payload.messages.map((m) => ({
+            ...m,
+            streaming: false, // Any in-flight message from before reload is done
+          }))
+          render()
+          messagesEl.scrollTop = messagesEl.scrollHeight
+        }
         break
 
       case 'clear':
         messages = []
         currentAssistantId = null
         render()
+        persistMessages() // Save the empty state so reload doesn't restore old messages
         break
 
       case 'streamStart':
@@ -385,6 +417,7 @@
         currentAssistantId = null
         updateSendButton()
         render()
+        persistMessages()
         break
 
       case 'streamEvent':

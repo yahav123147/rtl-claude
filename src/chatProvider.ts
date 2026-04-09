@@ -22,6 +22,8 @@ interface WebviewMessage {
 }
 
 const SESSION_STATE_KEY = 'rtlClaude.sdkSessionId'
+const MESSAGES_STATE_KEY = 'rtlClaude.messages'
+const MAX_PERSISTED_MESSAGES = 200
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'rtl-claude.chat'
@@ -65,6 +67,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   public newConversation() {
     this.context.workspaceState.update(SESSION_STATE_KEY, undefined)
+    this.context.workspaceState.update(MESSAGES_STATE_KEY, undefined)
     this.postToWebview({ type: 'clear' })
   }
 
@@ -104,8 +107,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.sendActiveContextToWebview()
         break
 
-      case 'ready':
-        // Webview is loaded — push initial state
+      case 'ready': {
+        // Webview is loaded — push initial state + saved messages
+        const savedMessages =
+          this.context.workspaceState.get<any[]>(MESSAGES_STATE_KEY) || []
         this.postToWebview({
           type: 'init',
           payload: {
@@ -114,6 +119,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             hasSession: Boolean(
               this.context.workspaceState.get(SESSION_STATE_KEY)
             ),
+            messages: savedMessages,
           },
         })
         // If a selection was queued before the webview was ready
@@ -125,6 +131,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.pendingSelection = null
         }
         break
+      }
+
+      case 'persistMessages': {
+        // Webview sends full messages array after each turn completes
+        const msgs = Array.isArray(msg.payload?.messages)
+          ? msg.payload.messages
+          : []
+        // Cap history to prevent state bloat
+        const capped = msgs.slice(-MAX_PERSISTED_MESSAGES)
+        await this.context.workspaceState.update(MESSAGES_STATE_KEY, capped)
+        break
+      }
     }
   }
 
