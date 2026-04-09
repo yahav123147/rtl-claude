@@ -11,6 +11,9 @@
   let messages = []
   let isStreaming = false
   let currentAssistantId = null
+  /** @type {Array<{id: string, title: string, updatedAt: number, messageCount: number}>} */
+  let conversations = []
+  let activeConversationId = null
 
   // ─── DOM refs ───────────────────────────────────────────────
   const messagesEl = document.getElementById('messages')
@@ -18,6 +21,11 @@
   const inputEl = /** @type {HTMLTextAreaElement} */ (document.getElementById('input'))
   const sendBtn = document.getElementById('sendBtn')
   const newConvBtn = document.getElementById('newConvBtn')
+  const historyBtn = document.getElementById('historyBtn')
+  const historyPanel = document.getElementById('historyPanel')
+  const historyCloseBtn = document.getElementById('historyCloseBtn')
+  const historyList = document.getElementById('historyList')
+  const conversationTitleEl = document.getElementById('conversationTitle')
   const workspaceLabel = document.getElementById('workspaceLabel')
   const contextChip = document.getElementById('contextChip')
   const contextText = document.getElementById('contextText')
@@ -315,6 +323,118 @@
     vscode.postMessage({ type: 'cancel' })
   }
 
+  // ─── History panel ──────────────────────────────────────────
+
+  function renderHistoryPanel() {
+    historyList.innerHTML = ''
+
+    if (conversations.length === 0) {
+      const empty = document.createElement('div')
+      empty.className = 'history-empty'
+      empty.textContent = 'אין שיחות עדיין'
+      historyList.appendChild(empty)
+      return
+    }
+
+    for (const conv of conversations) {
+      const item = document.createElement('div')
+      item.className = 'history-item'
+      if (conv.id === activeConversationId) item.classList.add('active')
+
+      const content = document.createElement('div')
+      content.className = 'history-item-content'
+
+      const title = document.createElement('div')
+      title.className = 'history-item-title'
+      title.textContent = conv.title || 'שיחה חדשה'
+      content.appendChild(title)
+
+      const meta = document.createElement('div')
+      meta.className = 'history-item-meta'
+      const time = document.createElement('span')
+      time.textContent = formatRelativeTime(conv.updatedAt)
+      meta.appendChild(time)
+      if (conv.messageCount > 0) {
+        const count = document.createElement('span')
+        count.textContent = `· ${conv.messageCount} הודעות`
+        meta.appendChild(count)
+      }
+      content.appendChild(meta)
+
+      item.appendChild(content)
+
+      const deleteBtn = document.createElement('button')
+      deleteBtn.className = 'history-item-delete'
+      deleteBtn.setAttribute('aria-label', 'מחק שיחה')
+      deleteBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation()
+        // Confirm before deleting
+        const confirmed = confirm(`למחוק את "${conv.title}"?`)
+        if (!confirmed) return
+        vscode.postMessage({
+          type: 'deleteConversation',
+          payload: { id: conv.id },
+        })
+      })
+      item.appendChild(deleteBtn)
+
+      item.addEventListener('click', () => {
+        if (conv.id === activeConversationId) {
+          closeHistoryPanel()
+          return
+        }
+        if (isStreaming) {
+          alert('המתן לסיום השיחה הנוכחית לפני מעבר')
+          return
+        }
+        vscode.postMessage({
+          type: 'switchConversation',
+          payload: { id: conv.id },
+        })
+        closeHistoryPanel()
+      })
+
+      historyList.appendChild(item)
+    }
+  }
+
+  function formatRelativeTime(ts) {
+    const diff = Date.now() - ts
+    const min = 60 * 1000
+    const hour = 60 * min
+    const day = 24 * hour
+    if (diff < min) return 'עכשיו'
+    if (diff < hour) return `לפני ${Math.floor(diff / min)} דק׳`
+    if (diff < day) return `לפני ${Math.floor(diff / hour)} שעות`
+    if (diff < 7 * day) return `לפני ${Math.floor(diff / day)} ימים`
+    const date = new Date(ts)
+    return `${date.getDate()}/${date.getMonth() + 1}`
+  }
+
+  function openHistoryPanel() {
+    renderHistoryPanel()
+    historyPanel.classList.remove('hidden')
+  }
+
+  function closeHistoryPanel() {
+    historyPanel.classList.add('hidden')
+  }
+
+  function toggleHistoryPanel() {
+    if (historyPanel.classList.contains('hidden')) openHistoryPanel()
+    else closeHistoryPanel()
+  }
+
+  function updateConversationTitle() {
+    const active = conversations.find((c) => c.id === activeConversationId)
+    if (active && active.title) {
+      conversationTitleEl.textContent = active.title
+    } else {
+      conversationTitleEl.textContent = 'Claude — צ׳אט עברי'
+    }
+  }
+
   // Persist messages to workspaceState so they survive window reloads.
   // Called after each turn completes (streamEnd).
   function persistMessages() {
@@ -373,7 +493,25 @@
 
   newConvBtn.addEventListener('click', () => {
     if (isStreaming) return
+    closeHistoryPanel()
     vscode.postMessage({ type: 'newConversation' })
+  })
+
+  historyBtn.addEventListener('click', () => {
+    toggleHistoryPanel()
+  })
+
+  historyCloseBtn.addEventListener('click', closeHistoryPanel)
+
+  // Close history panel when clicking outside
+  document.addEventListener('click', (e) => {
+    if (historyPanel.classList.contains('hidden')) return
+    const target = /** @type {Node} */ (e.target)
+    if (
+      historyPanel.contains(target) ||
+      historyBtn.contains(target)
+    ) return
+    closeHistoryPanel()
   })
 
   contextRemove.addEventListener('click', clearContextChip)
@@ -387,22 +525,58 @@
         if (msg.payload?.workspaceName) {
           workspaceLabel.textContent = `📁 ${msg.payload.workspaceName}`
         }
-        // Restore saved messages from workspace state
-        if (Array.isArray(msg.payload?.messages) && msg.payload.messages.length > 0) {
+        if (typeof msg.payload?.activeId === 'string') {
+          activeConversationId = msg.payload.activeId
+        }
+        if (Array.isArray(msg.payload?.conversations)) {
+          conversations = msg.payload.conversations
+        }
+        // Restore saved messages for active conversation
+        if (Array.isArray(msg.payload?.messages)) {
           messages = msg.payload.messages.map((m) => ({
             ...m,
             streaming: false, // Any in-flight message from before reload is done
           }))
-          render()
-          messagesEl.scrollTop = messagesEl.scrollHeight
+        } else {
+          messages = []
         }
+        updateConversationTitle()
+        render()
+        messagesEl.scrollTop = messagesEl.scrollHeight
         break
 
-      case 'clear':
-        messages = []
+      case 'loadConversation':
+        // Switching to another conversation (or after delete)
+        if (typeof msg.payload?.activeId === 'string') {
+          activeConversationId = msg.payload.activeId
+        }
+        if (Array.isArray(msg.payload?.messages)) {
+          messages = msg.payload.messages.map((m) => ({
+            ...m,
+            streaming: false,
+          }))
+        } else {
+          messages = []
+        }
         currentAssistantId = null
+        clearContextChip()
+        updateConversationTitle()
         render()
-        persistMessages() // Save the empty state so reload doesn't restore old messages
+        messagesEl.scrollTop = messagesEl.scrollHeight
+        break
+
+      case 'conversationsUpdated':
+        if (Array.isArray(msg.payload?.conversations)) {
+          conversations = msg.payload.conversations
+        }
+        if (typeof msg.payload?.activeId === 'string') {
+          activeConversationId = msg.payload.activeId
+        }
+        updateConversationTitle()
+        // If history panel is open, re-render it
+        if (!historyPanel.classList.contains('hidden')) {
+          renderHistoryPanel()
+        }
         break
 
       case 'streamStart':

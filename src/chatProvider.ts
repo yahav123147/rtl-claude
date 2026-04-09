@@ -1,6 +1,6 @@
 /**
- * ChatViewProvider — owns the sidebar webview, routes messages
- * between the webview UI and the Claude SDK, captures editor context.
+ * ChatViewProvider — owns the sidebar webview, manages multiple conversations,
+ * routes messages between the webview UI and the Claude SDK.
  */
 
 import * as vscode from 'vscode'
@@ -21,9 +21,39 @@ interface WebviewMessage {
   payload?: any
 }
 
-const SESSION_STATE_KEY = 'rtlClaude.sdkSessionId'
-const MESSAGES_STATE_KEY = 'rtlClaude.messages'
+interface PersistedMessage {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  tools: Array<{
+    id: string
+    tool: string
+    input: unknown
+    result?: string
+    isError?: boolean
+  }>
+}
+
+interface Conversation {
+  id: string
+  title: string
+  sdkSessionId: string | null
+  messages: PersistedMessage[]
+  createdAt: number
+  updatedAt: number
+}
+
+// Storage keys
+const CONVERSATIONS_KEY = 'rtlClaude.conversations'
+const ACTIVE_CONVERSATION_KEY = 'rtlClaude.activeConversationId'
+
+// Legacy keys (single-conversation era) — migrated on first load
+const LEGACY_SESSION_KEY = 'rtlClaude.sdkSessionId'
+const LEGACY_MESSAGES_KEY = 'rtlClaude.messages'
+
 const MAX_PERSISTED_MESSAGES = 200
+const MAX_CONVERSATIONS = 50
+const DEFAULT_TITLE = 'שיחה חדשה'
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'rtl-claude.chat'
@@ -32,7 +62,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private currentAbortController: AbortController | null = null
   private pendingSelection: SelectionPayload | null = null
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(private readonly context: vscode.ExtensionContext) {
+    this.migrateLegacyState()
+  }
+
+  // ─── Public API ────────────────────────────────────────────────
 
   public resolveWebviewView(webviewView: vscode.WebviewView) {
     this.view = webviewView
@@ -63,12 +97,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Public API: start a new conversation (clears session id).
+   * Public API: create a new conversation and switch to it.
+   * Called by the rtl-claude.newConversation command.
    */
   public newConversation() {
-    this.context.workspaceState.update(SESSION_STATE_KEY, undefined)
-    this.context.workspaceState.update(MESSAGES_STATE_KEY, undefined)
-    this.postToWebview({ type: 'clear' })
+    const newConv = this.createConversation()
+    this.setActiveConversation(newConv.id)
+    this.broadcastConversationsUpdated()
+    this.postToWebview({
+      type: 'loadConversation',
+      payload: { activeId: newConv.id, messages: [] },
+    })
   }
 
   /**
@@ -83,7 +122,158 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  // ─── Message handling ─────────────────────────────────────────────
+  // ─── Conversation storage ──────────────────────────────────────
+
+  private getConversations(): Conversation[] {
+    return (
+      this.context.workspaceState.get<Conversation[]>(CONVERSATIONS_KEY) || []
+    )
+  }
+
+  private async saveConversations(convs: Conversation[]): Promise<void> {
+    // Keep only the most recent MAX_CONVERSATIONS, sorted by updatedAt desc
+    const sorted = [...convs].sort((a, b) => b.updatedAt - a.updatedAt)
+    const capped = sorted.slice(0, MAX_CONVERSATIONS)
+    await this.context.workspaceState.update(CONVERSATIONS_KEY, capped)
+  }
+
+  private getActiveConversationId(): string | null {
+    return (
+      this.context.workspaceState.get<string>(ACTIVE_CONVERSATION_KEY) || null
+    )
+  }
+
+  private async setActiveConversation(id: string | null): Promise<void> {
+    await this.context.workspaceState.update(ACTIVE_CONVERSATION_KEY, id)
+  }
+
+  private getActiveConversation(): Conversation | null {
+    const id = this.getActiveConversationId()
+    if (!id) return null
+    return this.getConversations().find((c) => c.id === id) || null
+  }
+
+  /**
+   * Ensures there's always at least one conversation; creates one if not.
+   * Returns the conversation that should be active.
+   */
+  private ensureActiveConversation(): Conversation {
+    let active = this.getActiveConversation()
+    if (active) return active
+
+    // Pick the most recently updated, or create a new one
+    const all = this.getConversations()
+    if (all.length > 0) {
+      active = [...all].sort((a, b) => b.updatedAt - a.updatedAt)[0]
+      this.setActiveConversation(active.id)
+      return active
+    }
+
+    return this.createConversation()
+  }
+
+  private createConversation(): Conversation {
+    const now = Date.now()
+    const conv: Conversation = {
+      id: this.generateId(),
+      title: DEFAULT_TITLE,
+      sdkSessionId: null,
+      messages: [],
+      createdAt: now,
+      updatedAt: now,
+    }
+    const all = this.getConversations()
+    all.unshift(conv)
+    this.saveConversations(all)
+    this.setActiveConversation(conv.id)
+    return conv
+  }
+
+  private async deleteConversation(id: string): Promise<void> {
+    const all = this.getConversations().filter((c) => c.id !== id)
+    await this.saveConversations(all)
+
+    // If we deleted the active one, switch to another (or create new)
+    if (this.getActiveConversationId() === id) {
+      if (all.length > 0) {
+        await this.setActiveConversation(all[0].id)
+      } else {
+        const fresh = this.createConversation()
+        await this.setActiveConversation(fresh.id)
+      }
+    }
+  }
+
+  private async updateConversation(
+    id: string,
+    patch: Partial<Conversation>
+  ): Promise<void> {
+    const all = this.getConversations()
+    const idx = all.findIndex((c) => c.id === id)
+    if (idx === -1) return
+    all[idx] = { ...all[idx], ...patch, updatedAt: Date.now() }
+    await this.saveConversations(all)
+  }
+
+  // ─── Migration ─────────────────────────────────────────────────
+
+  private migrateLegacyState() {
+    const existing = this.context.workspaceState.get<Conversation[]>(
+      CONVERSATIONS_KEY
+    )
+    if (existing && existing.length > 0) return // Already migrated
+
+    const legacyMessages =
+      this.context.workspaceState.get<PersistedMessage[]>(LEGACY_MESSAGES_KEY) ||
+      []
+    const legacySessionId =
+      this.context.workspaceState.get<string>(LEGACY_SESSION_KEY) || null
+
+    if (legacyMessages.length === 0 && !legacySessionId) {
+      // Nothing to migrate
+      return
+    }
+
+    const now = Date.now()
+    const conv: Conversation = {
+      id: this.generateId(),
+      title: this.generateTitle(legacyMessages) || DEFAULT_TITLE,
+      sdkSessionId: legacySessionId,
+      messages: legacyMessages,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    this.context.workspaceState.update(CONVERSATIONS_KEY, [conv])
+    this.context.workspaceState.update(ACTIVE_CONVERSATION_KEY, conv.id)
+
+    // Clean up legacy keys
+    this.context.workspaceState.update(LEGACY_SESSION_KEY, undefined)
+    this.context.workspaceState.update(LEGACY_MESSAGES_KEY, undefined)
+
+    console.log('[RTL Claude] Migrated legacy state to multi-conversation')
+  }
+
+  private generateTitle(messages: PersistedMessage[]): string {
+    const firstUser = messages.find((m) => m.role === 'user')
+    if (!firstUser) return DEFAULT_TITLE
+    // Strip the leading "[הקובץ הפתוח כרגע: ...]" context line if present
+    let text = firstUser.text.replace(/^\[הקובץ הפתוח כרגע:[^\]]+\]\n+/, '')
+    // Strip code blocks (selection chips)
+    text = text.replace(/```[\s\S]*?```/g, '').trim()
+    // Take first line, cap to 40 chars
+    const firstLine = text.split('\n')[0].trim()
+    if (!firstLine) return DEFAULT_TITLE
+    return firstLine.length > 40 ? firstLine.slice(0, 40) + '…' : firstLine
+  }
+
+  private generateId(): string {
+    return (
+      Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
+    )
+  }
+
+  // ─── Webview message routing ───────────────────────────────────
 
   private async handleMessage(msg: WebviewMessage) {
     switch (msg.type) {
@@ -99,27 +289,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.newConversation()
         break
 
+      case 'switchConversation':
+        await this.handleSwitchConversation(msg.payload?.id)
+        break
+
+      case 'deleteConversation':
+        await this.handleDeleteConversation(msg.payload?.id)
+        break
+
       case 'openFile':
         await this.openFile(msg.payload?.path, msg.payload?.line)
         break
 
-      case 'getActiveContext':
-        this.sendActiveContextToWebview()
-        break
-
       case 'ready': {
-        // Webview is loaded — push initial state + saved messages
-        const savedMessages =
-          this.context.workspaceState.get<any[]>(MESSAGES_STATE_KEY) || []
+        // Webview is loaded — push initial state
+        const active = this.ensureActiveConversation()
         this.postToWebview({
           type: 'init',
           payload: {
             workspaceName:
               vscode.workspace.workspaceFolders?.[0]?.name || 'No workspace',
-            hasSession: Boolean(
-              this.context.workspaceState.get(SESSION_STATE_KEY)
-            ),
-            messages: savedMessages,
+            activeId: active.id,
+            messages: active.messages,
+            conversations: this.summarizeConversations(),
           },
         })
         // If a selection was queued before the webview was ready
@@ -135,16 +327,81 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case 'persistMessages': {
         // Webview sends full messages array after each turn completes
-        const msgs = Array.isArray(msg.payload?.messages)
+        const msgs: PersistedMessage[] = Array.isArray(msg.payload?.messages)
           ? msg.payload.messages
           : []
         // Cap history to prevent state bloat
         const capped = msgs.slice(-MAX_PERSISTED_MESSAGES)
-        await this.context.workspaceState.update(MESSAGES_STATE_KEY, capped)
+
+        const active = this.getActiveConversation()
+        if (!active) return
+
+        // Generate title from first user message if still default
+        let title = active.title
+        if (title === DEFAULT_TITLE && capped.length > 0) {
+          title = this.generateTitle(capped)
+        }
+
+        await this.updateConversation(active.id, {
+          messages: capped,
+          title,
+        })
+        // Notify webview so the conversations list reflects the new title
+        this.broadcastConversationsUpdated()
         break
       }
     }
   }
+
+  private async handleSwitchConversation(id: string | undefined) {
+    if (!id) return
+    const all = this.getConversations()
+    const target = all.find((c) => c.id === id)
+    if (!target) return
+
+    await this.setActiveConversation(id)
+    this.postToWebview({
+      type: 'loadConversation',
+      payload: { activeId: id, messages: target.messages },
+    })
+    this.broadcastConversationsUpdated()
+  }
+
+  private async handleDeleteConversation(id: string | undefined) {
+    if (!id) return
+    await this.deleteConversation(id)
+
+    // After delete, push the new active conversation
+    const active = this.ensureActiveConversation()
+    this.postToWebview({
+      type: 'loadConversation',
+      payload: { activeId: active.id, messages: active.messages },
+    })
+    this.broadcastConversationsUpdated()
+  }
+
+  private summarizeConversations() {
+    return this.getConversations()
+      .map((c) => ({
+        id: c.id,
+        title: c.title,
+        updatedAt: c.updatedAt,
+        messageCount: c.messages.length,
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  private broadcastConversationsUpdated() {
+    this.postToWebview({
+      type: 'conversationsUpdated',
+      payload: {
+        activeId: this.getActiveConversationId(),
+        conversations: this.summarizeConversations(),
+      },
+    })
+  }
+
+  // ─── Sending a message to Claude ───────────────────────────────
 
   private async handleSendMessage(text: string) {
     if (!text.trim()) return
@@ -167,8 +424,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    const resumeSessionId =
-      this.context.workspaceState.get<string>(SESSION_STATE_KEY) || null
+    const active = this.ensureActiveConversation()
+    const resumeSessionId = active.sdkSessionId
 
     this.currentAbortController = new AbortController()
 
@@ -188,10 +445,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       for await (const event of generator) {
         // Persist session id for conversation continuity
         if (event.type === 'session') {
-          await this.context.workspaceState.update(
-            SESSION_STATE_KEY,
-            event.sessionId
-          )
+          await this.updateConversation(active.id, {
+            sdkSessionId: event.sessionId,
+          })
         }
 
         this.postToWebview({ type: 'streamEvent', payload: event })
@@ -201,16 +457,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+      const errMsg = err instanceof Error ? err.message : String(err)
       this.postToWebview({
         type: 'streamEvent',
-        payload: { type: 'error', message: msg } satisfies StreamEvent,
+        payload: { type: 'error', message: errMsg } satisfies StreamEvent,
       })
     } finally {
       this.postToWebview({ type: 'streamEnd' })
       this.currentAbortController = null
     }
   }
+
+  // ─── File opening from chat links ──────────────────────────────
 
   private async openFile(filePath: string, line?: number) {
     if (!filePath) return
@@ -244,40 +502,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private sendActiveContextToWebview() {
-    const editor = vscode.window.activeTextEditor
-    if (!editor) {
-      this.postToWebview({ type: 'activeContext', payload: null })
-      return
-    }
-
-    const filePath = vscode.workspace.asRelativePath(editor.document.uri)
-    const hasSelection = !editor.selection.isEmpty
-    let selectionInfo = null
-    if (hasSelection) {
-      selectionInfo = {
-        text: editor.document.getText(editor.selection),
-        startLine: editor.selection.start.line + 1,
-        endLine: editor.selection.end.line + 1,
-        language: editor.document.languageId,
-      }
-    }
-
-    this.postToWebview({
-      type: 'activeContext',
-      payload: {
-        filePath,
-        language: editor.document.languageId,
-        selection: selectionInfo,
-      },
-    })
-  }
-
   private postToWebview(msg: any) {
     this.view?.webview.postMessage(msg)
   }
 
-  // ─── HTML ────────────────────────────────────────────────────────
+  // ─── HTML ──────────────────────────────────────────────────────
 
   private getHtml(webview: vscode.Webview): string {
     const mediaPath = path.join(this.context.extensionPath, 'media')
@@ -285,7 +514,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     let html = fs.readFileSync(htmlPath, 'utf8')
 
-    // Build URIs for static assets
     const cssUri = webview.asWebviewUri(
       vscode.Uri.file(path.join(mediaPath, 'chat.css'))
     )
