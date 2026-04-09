@@ -96,6 +96,17 @@
           "default": "claude-opus-4-6",
           "description": "מודל Claude לשימוש בצ׳אט"
         },
+        "rtlClaude.effort": {
+          "type": "string",
+          "enum": ["low", "medium", "max"],
+          "enumDescriptions": [
+            "מהיר - פחות חשיבה, תגובה זריזה",
+            "מאוזן - איזון בין מהירות לעומק",
+            "מקסימלי - חשיבה עמוקה ככל האפשר"
+          ],
+          "default": "max",
+          "description": "רמת המאמץ של המודל (effort level)"
+        },
         "rtlClaude.maxTurns": {
           "type": "number",
           "default": 50,
@@ -105,6 +116,21 @@
           "type": "boolean",
           "default": true,
           "description": "כלול אוטומטית את שם הקובץ הפתוח כקונטקסט"
+        },
+        "rtlClaude.includeClaudeMd": {
+          "type": "boolean",
+          "default": true,
+          "description": "טען אוטומטית את CLAUDE.md מהפרויקט ל-system prompt"
+        },
+        "rtlClaude.enableMemory": {
+          "type": "boolean",
+          "default": true,
+          "description": "טען וחבר למערכת הזיכרון האוטומטית של Claude (~/.claude/projects/.../memory)"
+        },
+        "rtlClaude.enableMcpServers": {
+          "type": "boolean",
+          "default": true,
+          "description": "טען MCP servers מ-~/.claude.json (גלובליים ופרויקט-ספציפיים)"
         }
       }
     }

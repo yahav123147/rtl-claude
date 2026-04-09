@@ -6,6 +6,9 @@
  */
 
 import * as vscode from 'vscode'
+import * as path from 'path'
+import * as fs from 'fs'
+import * as os from 'os'
 
 // Strip env vars that mark this process as a Claude Code child.
 // Without this, the SDK's spawned `claude` binary detects nesting
@@ -21,6 +24,8 @@ export interface QueryOptions {
   model?: string
   maxTurns?: number
   signal?: AbortSignal
+  mcpServers?: Record<string, unknown>
+  effort?: 'low' | 'medium' | 'max'
 }
 
 export type StreamEvent =
@@ -33,6 +38,13 @@ export type StreamEvent =
       toolUseId: string
       content: string
       isError: boolean
+    }
+  | {
+      type: 'usage'
+      inputTokens: number
+      outputTokens: number
+      cacheReadTokens?: number
+      cacheCreateTokens?: number
     }
   | { type: 'done' }
   | { type: 'error'; message: string }
@@ -68,6 +80,10 @@ export async function* runQuery(
           options.model && options.model !== 'inherit'
             ? options.model
             : undefined,
+        ...(options.mcpServers && Object.keys(options.mcpServers).length > 0
+          ? { mcpServers: options.mcpServers }
+          : {}),
+        ...(options.effort ? { effort: options.effort } : {}),
       } as any,
     })
 
@@ -87,10 +103,22 @@ export async function* runQuery(
         if (sid) yield { type: 'session', sessionId: sid }
       }
 
-      // Stream assistant content
+      // Stream assistant content + token usage
       if (event.type === 'assistant' && 'message' in event) {
-        const content = (event as { message: { content: unknown } }).message
-          .content
+        const message = (event as { message: any }).message
+
+        // Capture usage from each assistant message
+        if (message.usage) {
+          yield {
+            type: 'usage',
+            inputTokens: message.usage.input_tokens || 0,
+            outputTokens: message.usage.output_tokens || 0,
+            cacheReadTokens: message.usage.cache_read_input_tokens,
+            cacheCreateTokens: message.usage.cache_creation_input_tokens,
+          }
+        }
+
+        const content = message.content
         if (Array.isArray(content)) {
           for (const block of content as Array<Record<string, unknown>>) {
             if (block.type === 'text' && typeof block.text === 'string') {
@@ -157,12 +185,123 @@ export async function* runQuery(
   }
 }
 
+// ─── Project context loading ──────────────────────────────────────
+
+export interface ProjectContext {
+  claudeMd: string | null
+  memoryIndex: string | null
+  memoryDir: string
+  memoryFileCount: number
+}
+
 /**
- * Build the system prompt with workspace + date context.
+ * Loads CLAUDE.md from workspace root and MEMORY.md from the
+ * auto-memory dir corresponding to the current workspace.
+ * The memory dir mirrors what Claude Code uses internally.
  */
-export function buildSystemPrompt(workspaceRoot: string): string {
+export function loadProjectContext(workspaceRoot: string): ProjectContext {
+  const result: ProjectContext = {
+    claudeMd: null,
+    memoryIndex: null,
+    memoryDir: getMemoryDir(workspaceRoot),
+    memoryFileCount: 0,
+  }
+
+  // CLAUDE.md from workspace root
+  const claudeMdPath = path.join(workspaceRoot, 'CLAUDE.md')
+  if (fileExists(claudeMdPath)) {
+    try {
+      result.claudeMd = fs.readFileSync(claudeMdPath, 'utf8')
+    } catch (e) {
+      console.error('[RTL Claude] Failed to read CLAUDE.md:', e)
+    }
+  }
+
+  // MEMORY.md from auto-memory dir
+  const memoryIndexPath = path.join(result.memoryDir, 'MEMORY.md')
+  if (fileExists(memoryIndexPath)) {
+    try {
+      result.memoryIndex = fs.readFileSync(memoryIndexPath, 'utf8')
+    } catch (e) {
+      console.error('[RTL Claude] Failed to read MEMORY.md:', e)
+    }
+  }
+
+  // Count memory files (excluding MEMORY.md itself)
+  if (fs.existsSync(result.memoryDir)) {
+    try {
+      const files = fs
+        .readdirSync(result.memoryDir)
+        .filter((f) => f.endsWith('.md') && f !== 'MEMORY.md')
+      result.memoryFileCount = files.length
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  return result
+}
+
+/**
+ * Returns the auto-memory directory for the given workspace.
+ * Mirrors Claude Code's internal path encoding: replace / with -.
+ */
+export function getMemoryDir(workspaceRoot: string): string {
+  // Encode the path the way Claude Code does: /Users/foo/bar → -Users-foo-bar
+  const encoded = workspaceRoot.replace(/\//g, '-')
+  return path.join(os.homedir(), '.claude', 'projects', encoded, 'memory')
+}
+
+/**
+ * Reads MCP servers configured for this workspace from ~/.claude.json
+ * (project-scoped) and from the global config. Returns the merged set.
+ */
+export function loadMcpServers(workspaceRoot: string): Record<string, unknown> {
+  try {
+    const claudeJsonPath = path.join(os.homedir(), '.claude.json')
+    if (!fileExists(claudeJsonPath)) return {}
+
+    const raw = fs.readFileSync(claudeJsonPath, 'utf8')
+    const data = JSON.parse(raw)
+
+    const merged: Record<string, unknown> = {}
+
+    // Global mcpServers
+    if (data.mcpServers && typeof data.mcpServers === 'object') {
+      Object.assign(merged, data.mcpServers)
+    }
+
+    // Project-scoped mcpServers
+    const project = data.projects?.[workspaceRoot]
+    if (project?.mcpServers && typeof project.mcpServers === 'object') {
+      Object.assign(merged, project.mcpServers)
+    }
+
+    return merged
+  } catch (e) {
+    console.error('[RTL Claude] Failed to load MCP servers:', e)
+    return {}
+  }
+}
+
+function fileExists(p: string): boolean {
+  try {
+    return fs.statSync(p).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Build the system prompt with workspace + date context + memory + CLAUDE.md.
+ */
+export function buildSystemPrompt(
+  workspaceRoot: string,
+  ctx?: ProjectContext
+): string {
   const today = new Date().toISOString().split('T')[0]
-  return `אתה Claude — עוזר קוד אישי שעובד מתוך תוסף Antigravity/VS Code בשם "RTL Claude".
+
+  let prompt = `אתה Claude — עוזר קוד אישי שעובד מתוך תוסף Antigravity/VS Code בשם "RTL Claude".
 
 # שפה
 - ענה תמיד בעברית, ברורה וזורמת.
@@ -182,8 +321,60 @@ export function buildSystemPrompt(workspaceRoot: string): string {
 - לפני שינויי קוד: קרא את הקובץ קודם.
 - אחרי שינויים: סכם בקצרה מה עשית.
 - אל תוסיף קוד מיותר, הערות מיותרות, או תיעוד שלא ביקשו.
-- אם המשתמש שולח קטע קוד נבחר — התייחס אליו ישירות.
 
 הספרייה הנוכחית: ${workspaceRoot}
 היום: ${today}`
+
+  // Append CLAUDE.md if present
+  if (ctx?.claudeMd) {
+    prompt += `\n\n# CLAUDE.md (project rules)\n\nהקובץ הזה נמצא בשורש הפרויקט והוא מכיל את חוקי הפרויקט. עקוב אחריו תמיד:\n\n${ctx.claudeMd}`
+  }
+
+  // Append MEMORY.md if present + memory instructions
+  if (ctx?.memoryIndex) {
+    prompt += `\n\n# Auto-memory system
+
+יש לך מערכת זיכרון מתמשכת ב-${ctx.memoryDir}. זה אותו הזיכרון שהראשי Claude Code משתמש בו עבור הפרויקט הזה — אתם חולקים את אותם הקבצים.
+
+האינדקס (MEMORY.md) המעודכן:
+
+${ctx.memoryIndex}
+
+## שימוש בזיכרון
+
+- כשהמשתמש אומר "תזכור" או "תשמור" משהו — שמור אותו מיד כקובץ memory חדש.
+- כשהמשתמש אומר "שכח" משהו — מצא את הקובץ הרלוונטי ומחק את הערך.
+- כשאתה לומד דבר חדש על המשתמש (תפקיד, העדפות, רקע), שמור כ-user memory.
+- כשהמשתמש נותן feedback על איך לעבוד ("אל תעשה X", "תמיד תעשה Y"), שמור כ-feedback memory.
+- כשאתה לומד על פרויקט, deadline, או החלטה אדריכלית, שמור כ-project memory.
+
+## איך לשמור זיכרון
+
+צור קובץ markdown חדש ב-${ctx.memoryDir} עם frontmatter:
+
+\`\`\`markdown
+---
+name: {{שם תיאורי}}
+description: {{תיאור של שורה אחת}}
+type: {{user | feedback | project | reference}}
+---
+
+{{תוכן הזיכרון}}
+\`\`\`
+
+ואז הוסף שורה ב-MEMORY.md (שגם נמצא ב-${ctx.memoryDir}/MEMORY.md):
+\`- [כותרת](filename.md) — סיכום קצר\`
+
+## חשוב
+- אל תיצור duplicates — קודם תבדוק אם יש memory קיים בנושא.
+- אל תשמור מידע שאפשר לגזור מהקוד עצמו (זה מתעדכן ממילא).
+- אל תשמור מידע שזמני — רק דברים שיהיו רלוונטיים בשיחות עתידיות.`
+  } else if (ctx?.memoryDir) {
+    // No MEMORY.md yet, but tell Claude where to start one
+    prompt += `\n\n# Auto-memory system
+
+יש לך מערכת זיכרון מתמשכת. הספרייה ${ctx.memoryDir} עדיין לא קיימת — אם המשתמש יבקש לזכור משהו, צור אותה ושמור שם MEMORY.md + קובץ memory ראשון.`
+  }
+
+  return prompt
 }

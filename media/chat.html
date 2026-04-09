@@ -18,6 +18,12 @@
         </div>
       </div>
       <div class="header-actions">
+        <button id="settingsBtn" class="icon-btn" title="הגדרות" aria-label="הגדרות">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
         <button id="historyBtn" class="icon-btn" title="היסטוריית שיחות" aria-label="היסטוריית שיחות">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 3v5h5"/>
@@ -46,14 +52,87 @@
       <div id="historyList" class="history-list"></div>
     </div>
 
+    <div id="settingsPanel" class="settings-panel hidden">
+      <div class="settings-header">
+        <span class="settings-title">הגדרות</span>
+        <button id="settingsCloseBtn" class="icon-btn" aria-label="סגור">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="settings-body">
+        <div class="setting-group">
+          <label class="setting-label">מודל</label>
+          <select id="modelSelect" class="setting-input">
+            <option value="claude-opus-4-6">Claude Opus 4.6 (החזק ביותר)</option>
+            <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (מאוזן)</option>
+            <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (מהיר)</option>
+          </select>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-label">מאמץ (Effort)</label>
+          <div class="effort-buttons">
+            <button class="effort-btn" data-effort="low">מהיר</button>
+            <button class="effort-btn" data-effort="medium">מאוזן</button>
+            <button class="effort-btn active" data-effort="max">מקסימלי</button>
+          </div>
+          <p class="setting-hint">מקסימלי = חשיבה הכי עמוקה. מהיר = פחות tokens, תגובה זריזה.</p>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-toggle">
+            <input type="checkbox" id="includeActiveFile" checked />
+            <span>כלול את הקובץ הפתוח כקונטקסט</span>
+          </label>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-toggle">
+            <input type="checkbox" id="includeClaudeMd" checked />
+            <span>טען CLAUDE.md מהפרויקט</span>
+          </label>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-toggle">
+            <input type="checkbox" id="enableMemory" checked />
+            <span>מערכת זיכרון אוטומטית</span>
+          </label>
+          <p class="setting-hint">מחבר לאותו זיכרון שגם Claude Code הראשי משתמש בו.</p>
+        </div>
+
+        <div class="setting-group">
+          <label class="setting-toggle">
+            <input type="checkbox" id="enableMcpServers" checked />
+            <span>טען MCP servers</span>
+          </label>
+          <p class="setting-hint">מ-~/.claude.json (גלובלי + פרויקט-ספציפי)</p>
+        </div>
+
+        <div class="setting-group setting-context-status">
+          <div class="setting-label">מצב נוכחי</div>
+          <div id="contextStatus" class="context-status"></div>
+        </div>
+
+        <button id="openVsSettingsBtn" class="settings-secondary-btn">
+          פתח את הגדרות VS Code
+        </button>
+      </div>
+    </div>
+
     <main class="messages" id="messages">
+      <div id="welcomeBanner" class="welcome-banner hidden"></div>
       <div class="empty-state" id="emptyState">
         <div class="empty-icon">💬</div>
         <h2>שלום! איך אני יכול לעזור?</h2>
-        <p>כתוב לי בעברית. יש לי גישה מלאה לפרויקט שלך — קבצים, פקודות, חיפוש.</p>
+        <p>כתוב לי בעברית. יש לי גישה מלאה לפרויקט שלך — קבצים, פקודות, חיפוש, ואינטרנט.</p>
         <div class="hints">
           <div class="hint"><kbd>⌘⇧H</kbd> פתח את הצ׳אט</div>
           <div class="hint"><kbd>⌘⇧L</kbd> שלח קוד נבחר</div>
+          <div class="hint">📎 הדבק תמונה מהקליפבורד</div>
         </div>
       </div>
     </main>
@@ -65,7 +144,14 @@
         <button class="context-remove" id="contextRemove" aria-label="הסר">✕</button>
       </div>
 
+      <div id="imageChips" class="image-chips"></div>
+
       <div class="input-row">
+        <button id="attachBtn" class="attach-btn" title="צרף תמונה" aria-label="צרף תמונה">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+          </svg>
+        </button>
         <textarea
           id="input"
           rows="1"
@@ -82,8 +168,13 @@
           </svg>
         </button>
       </div>
-      <div class="composer-hint">Claude יכול לערוך קבצים ולהריץ פקודות. בדוק את הפעולות שלו.</div>
+      <div class="composer-footer">
+        <div id="usageDisplay" class="usage-display hidden"></div>
+        <div class="composer-hint">Claude יכול לערוך קבצים ולהריץ פקודות. בדוק את הפעולות שלו.</div>
+      </div>
     </footer>
+
+    <input type="file" id="imageFileInput" accept="image/*" hidden />
   </div>
 
   <script nonce="{{nonce}}" src="{{markedUri}}"></script>

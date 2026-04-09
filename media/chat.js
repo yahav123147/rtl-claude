@@ -14,10 +14,20 @@
   /** @type {Array<{id: string, title: string, updatedAt: number, messageCount: number}>} */
   let conversations = []
   let activeConversationId = null
+  /** Pending images attached to the next message */
+  /** @type {Array<{localId: string, dataUrl: string, name: string, savedPath?: string}>} */
+  let pendingImages = []
+  /** Cumulative token usage for current conversation */
+  let conversationUsage = null
+  /** Project context info from extension host */
+  let contextInfo = null
+  /** Whether welcome banner has been shown this session */
+  let welcomeShown = false
 
   // ─── DOM refs ───────────────────────────────────────────────
   const messagesEl = document.getElementById('messages')
   const emptyStateEl = document.getElementById('emptyState')
+  const welcomeBanner = document.getElementById('welcomeBanner')
   const inputEl = /** @type {HTMLTextAreaElement} */ (document.getElementById('input'))
   const sendBtn = document.getElementById('sendBtn')
   const newConvBtn = document.getElementById('newConvBtn')
@@ -25,11 +35,28 @@
   const historyPanel = document.getElementById('historyPanel')
   const historyCloseBtn = document.getElementById('historyCloseBtn')
   const historyList = document.getElementById('historyList')
+  const settingsBtn = document.getElementById('settingsBtn')
+  const settingsPanel = document.getElementById('settingsPanel')
+  const settingsCloseBtn = document.getElementById('settingsCloseBtn')
   const conversationTitleEl = document.getElementById('conversationTitle')
   const workspaceLabel = document.getElementById('workspaceLabel')
   const contextChip = document.getElementById('contextChip')
   const contextText = document.getElementById('contextText')
   const contextRemove = document.getElementById('contextRemove')
+  const attachBtn = document.getElementById('attachBtn')
+  const imageFileInput = /** @type {HTMLInputElement} */ (document.getElementById('imageFileInput'))
+  const imageChipsContainer = document.getElementById('imageChips')
+  const usageDisplay = document.getElementById('usageDisplay')
+  const inputRow = document.querySelector('.input-row')
+  // Settings inputs
+  const modelSelect = /** @type {HTMLSelectElement} */ (document.getElementById('modelSelect'))
+  const includeActiveFileEl = /** @type {HTMLInputElement} */ (document.getElementById('includeActiveFile'))
+  const includeClaudeMdEl = /** @type {HTMLInputElement} */ (document.getElementById('includeClaudeMd'))
+  const enableMemoryEl = /** @type {HTMLInputElement} */ (document.getElementById('enableMemory'))
+  const enableMcpServersEl = /** @type {HTMLInputElement} */ (document.getElementById('enableMcpServers'))
+  const contextStatusEl = document.getElementById('contextStatus')
+  const openVsSettingsBtn = document.getElementById('openVsSettingsBtn')
+  const effortBtns = document.querySelectorAll('.effort-btn')
 
   // ─── Tool labels ────────────────────────────────────────────
   const TOOL_LABELS = {
@@ -56,7 +83,6 @@
   }
 
   // ─── Markdown renderer ──────────────────────────────────────
-  // marked.js is loaded globally
   if (typeof marked !== 'undefined') {
     marked.setOptions({
       gfm: true,
@@ -68,7 +94,6 @@
 
   function renderMarkdown(text) {
     if (typeof marked === 'undefined') {
-      // Fallback: escape HTML and preserve newlines
       const escaped = text
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -83,21 +108,18 @@
   function render() {
     if (messages.length === 0) {
       emptyStateEl.style.display = 'block'
-      // Clear all but empty state
       Array.from(messagesEl.children).forEach((child) => {
-        if (child !== emptyStateEl) child.remove()
+        if (child !== emptyStateEl && child !== welcomeBanner) child.remove()
       })
       return
     }
 
     emptyStateEl.style.display = 'none'
 
-    // Diff-render: only update what's needed.
-    // For simplicity in v1, full re-render but preserve scroll position.
     const wasAtBottom = isScrolledToBottom()
 
     Array.from(messagesEl.children).forEach((child) => {
-      if (child !== emptyStateEl) child.remove()
+      if (child !== emptyStateEl && child !== welcomeBanner) child.remove()
     })
 
     for (const msg of messages) {
@@ -147,13 +169,40 @@
       }
 
       if (msg.text) {
+        // Wrap so we can position the copy button
+        const textWrapper = document.createElement('div')
+        textWrapper.className = 'message-text-wrapper'
+
         const textEl = document.createElement('div')
         textEl.className = 'assistant-text'
         textEl.innerHTML = renderMarkdown(msg.text)
         attachLinkHandlers(textEl)
-        content.appendChild(textEl)
+        textWrapper.appendChild(textEl)
+
+        // Copy button (only for non-streaming completed messages)
+        if (!msg.streaming) {
+          const copyBtn = document.createElement('button')
+          copyBtn.className = 'copy-btn'
+          copyBtn.title = 'העתק'
+          copyBtn.innerHTML =
+            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+          copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(msg.text).then(() => {
+              copyBtn.classList.add('copied')
+              copyBtn.innerHTML =
+                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+              setTimeout(() => {
+                copyBtn.classList.remove('copied')
+                copyBtn.innerHTML =
+                  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+              }, 1500)
+            })
+          })
+          textWrapper.appendChild(copyBtn)
+        }
+
+        content.appendChild(textWrapper)
       } else if (msg.streaming) {
-        // Empty streaming message — show dots
         const dots = document.createElement('div')
         dots.className = 'streaming-dots'
         dots.innerHTML = '<span></span><span></span><span></span>'
@@ -240,13 +289,11 @@
     links.forEach((link) => {
       const href = link.getAttribute('href')
       if (!href) return
-      // External links: leave default
       if (/^https?:\/\//.test(href)) {
         link.setAttribute('target', '_blank')
         link.setAttribute('rel', 'noopener noreferrer')
         return
       }
-      // Internal: file references like src/foo.ts or src/foo.ts#L42
       link.addEventListener('click', (e) => {
         e.preventDefault()
         const [path, hash] = href.split('#')
@@ -276,20 +323,47 @@
       sendBtn.disabled = false
     } else {
       sendBtn.classList.remove('streaming')
-      sendBtn.disabled = inputEl.value.trim().length === 0
+      const hasInput = inputEl.value.trim().length > 0
+      const hasImages = pendingImages.length > 0
+      sendBtn.disabled = !hasInput && !hasImages
     }
   }
 
   function sendMessage() {
     const text = inputEl.value.trim()
-    if (!text || isStreaming) return
+    if (!text && pendingImages.length === 0) return
+    if (isStreaming) return
 
-    // If there's a context chip, prepend it as a code block
-    let fullText = text
+    // Wait for any pending images to be saved
+    const unsavedImages = pendingImages.filter((img) => !img.savedPath)
+    if (unsavedImages.length > 0) {
+      // Defer until images are saved (handled by imageSaved message)
+      setTimeout(sendMessage, 100)
+      return
+    }
+
+    // Build the full text with images and selection
+    let fullText = text || ''
+
     if (currentSelection) {
-      fullText = `קטע נבחר מ-\`${currentSelection.filePath}\` (שורות ${currentSelection.startLine}-${currentSelection.endLine}):\n\n\`\`\`${currentSelection.language || ''}\n${currentSelection.text}\n\`\`\`\n\n${text}`
+      const selectionBlock = `קטע נבחר מ-\`${currentSelection.filePath}\` (שורות ${currentSelection.startLine}-${currentSelection.endLine}):\n\n\`\`\`${currentSelection.language || ''}\n${currentSelection.text}\n\`\`\`\n\n`
+      fullText = selectionBlock + fullText
       clearContextChip()
     }
+
+    if (pendingImages.length > 0) {
+      const imageRefs = pendingImages
+        .map(
+          (img, i) =>
+            `[תמונה ${i + 1}: ${img.savedPath} — אנא קרא אותה עם הכלי Read]`
+        )
+        .join('\n')
+      fullText = imageRefs + '\n\n' + fullText
+      pendingImages = []
+      renderImageChips()
+    }
+
+    if (!fullText.trim()) return
 
     const userMsg = {
       id: 'u-' + Date.now(),
@@ -307,11 +381,13 @@
     currentAssistantId = assistantMsg.id
 
     messages.push(userMsg, assistantMsg)
+    hideWelcomeBanner()
     render()
     messagesEl.scrollTop = messagesEl.scrollHeight
 
     inputEl.value = ''
     autosizeInput()
+    updateSendButton()
 
     vscode.postMessage({
       type: 'sendMessage',
@@ -321,6 +397,63 @@
 
   function cancelStream() {
     vscode.postMessage({ type: 'cancel' })
+  }
+
+  // ─── Image handling ─────────────────────────────────────────
+
+  function attachImageFromFile(file) {
+    if (!file || !file.type.startsWith('image/')) return
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const dataUrl = String(e.target?.result || '')
+      if (!dataUrl) return
+      const localId = 'img-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6)
+      pendingImages.push({
+        localId,
+        dataUrl,
+        name: file.name || 'image.png',
+      })
+      renderImageChips()
+      updateSendButton()
+      // Save to temp file via host
+      vscode.postMessage({
+        type: 'uploadImage',
+        payload: { dataUrl, id: localId },
+      })
+    }
+    reader.readAsDataURL(file)
+  }
+
+  function renderImageChips() {
+    imageChipsContainer.innerHTML = ''
+    for (const img of pendingImages) {
+      const chip = document.createElement('div')
+      chip.className = 'image-chip'
+
+      const thumb = document.createElement('img')
+      thumb.className = 'image-chip-thumb'
+      thumb.src = img.dataUrl
+      thumb.alt = img.name
+      chip.appendChild(thumb)
+
+      const name = document.createElement('span')
+      name.className = 'image-chip-name'
+      name.textContent = img.name
+      chip.appendChild(name)
+
+      const removeBtn = document.createElement('button')
+      removeBtn.className = 'image-chip-remove'
+      removeBtn.setAttribute('aria-label', 'הסר תמונה')
+      removeBtn.textContent = '✕'
+      removeBtn.addEventListener('click', () => {
+        pendingImages = pendingImages.filter((p) => p.localId !== img.localId)
+        renderImageChips()
+        updateSendButton()
+      })
+      chip.appendChild(removeBtn)
+
+      imageChipsContainer.appendChild(chip)
+    }
   }
 
   // ─── History panel ──────────────────────────────────────────
@@ -366,10 +499,11 @@
       const deleteBtn = document.createElement('button')
       deleteBtn.className = 'history-item-delete'
       deleteBtn.setAttribute('aria-label', 'מחק שיחה')
-      deleteBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
+      deleteBtn.title = 'מחק שיחה'
+      deleteBtn.innerHTML =
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
       deleteBtn.addEventListener('click', (e) => {
         e.stopPropagation()
-        // Confirm before deleting
         const confirmed = confirm(`למחוק את "${conv.title}"?`)
         if (!confirmed) return
         vscode.postMessage({
@@ -413,6 +547,7 @@
   }
 
   function openHistoryPanel() {
+    closeSettingsPanel()
     renderHistoryPanel()
     historyPanel.classList.remove('hidden')
   }
@@ -435,10 +570,111 @@
     }
   }
 
+  // ─── Settings panel ─────────────────────────────────────────
+
+  function openSettingsPanel() {
+    closeHistoryPanel()
+    syncSettingsFromState()
+    renderContextStatus()
+    settingsPanel.classList.remove('hidden')
+  }
+
+  function closeSettingsPanel() {
+    settingsPanel.classList.add('hidden')
+  }
+
+  function toggleSettingsPanel() {
+    if (settingsPanel.classList.contains('hidden')) openSettingsPanel()
+    else closeSettingsPanel()
+  }
+
+  function syncSettingsFromState() {
+    // The host pushes settings via 'settingsState' message; until then, defaults are shown
+  }
+
+  function renderContextStatus() {
+    if (!contextStatusEl) return
+    if (!contextInfo) {
+      contextStatusEl.innerHTML = '<div class="status-row"><span>טוען...</span></div>'
+      return
+    }
+    const rows = []
+    rows.push(
+      `<div class="status-row"><span class="status-icon ${contextInfo.hasClaudeMd ? 'status-on' : 'status-off'}">${contextInfo.hasClaudeMd ? '✓' : '○'}</span> CLAUDE.md ${contextInfo.hasClaudeMd ? 'נטען' : 'לא נמצא'}</div>`
+    )
+    rows.push(
+      `<div class="status-row"><span class="status-icon ${contextInfo.hasMemory ? 'status-on' : 'status-off'}">${contextInfo.hasMemory ? '✓' : '○'}</span> זיכרון: ${contextInfo.hasMemory ? `${contextInfo.memoryFileCount} קבצים` : 'לא נמצא'}</div>`
+    )
+    rows.push(
+      `<div class="status-row"><span class="status-icon ${contextInfo.mcpServerCount > 0 ? 'status-on' : 'status-off'}">${contextInfo.mcpServerCount > 0 ? '✓' : '○'}</span> MCP servers: ${contextInfo.mcpServerCount > 0 ? contextInfo.mcpServerNames.join(', ') : 'אין'}</div>`
+    )
+    contextStatusEl.innerHTML = rows.join('')
+  }
+
+  // Settings input handlers — push to host via 'updateSetting'
+  function bindSetting(el, key) {
+    if (!el) return
+    el.addEventListener('change', () => {
+      const value = el.type === 'checkbox' ? el.checked : el.value
+      vscode.postMessage({
+        type: 'updateSetting',
+        payload: { key, value },
+      })
+    })
+  }
+
+  // ─── Welcome banner ─────────────────────────────────────────
+
+  function showWelcomeBanner(text) {
+    welcomeBanner.innerHTML = ''
+    const icon = document.createElement('span')
+    icon.className = 'welcome-banner-icon'
+    icon.textContent = '👋'
+    welcomeBanner.appendChild(icon)
+
+    const txt = document.createElement('span')
+    txt.className = 'welcome-banner-text'
+    txt.textContent = text
+    welcomeBanner.appendChild(txt)
+
+    const close = document.createElement('button')
+    close.className = 'welcome-banner-close'
+    close.setAttribute('aria-label', 'סגור')
+    close.textContent = '✕'
+    close.addEventListener('click', hideWelcomeBanner)
+    welcomeBanner.appendChild(close)
+
+    welcomeBanner.classList.remove('hidden')
+    welcomeShown = true
+  }
+
+  function hideWelcomeBanner() {
+    welcomeBanner.classList.add('hidden')
+  }
+
+  // ─── Token usage display ────────────────────────────────────
+
+  function renderUsage() {
+    if (!conversationUsage || conversationUsage.input + conversationUsage.output === 0) {
+      usageDisplay.classList.add('hidden')
+      return
+    }
+    const inputK = (conversationUsage.input / 1000).toFixed(1)
+    const outputK = (conversationUsage.output / 1000).toFixed(1)
+    // Rough Opus pricing (Apr 2026): $15/M input, $75/M output
+    const cost =
+      (conversationUsage.input * 15) / 1_000_000 +
+      (conversationUsage.output * 75) / 1_000_000
+    const cacheNote =
+      conversationUsage.cacheRead > 0
+        ? ` · ${(conversationUsage.cacheRead / 1000).toFixed(1)}K cached`
+        : ''
+    usageDisplay.innerHTML = `<span class="usage-item">${inputK}K → ${outputK}K tokens${cacheNote}</span><span class="usage-cost">~$${cost.toFixed(3)}</span>`
+    usageDisplay.classList.remove('hidden')
+  }
+
   // Persist messages to workspaceState so they survive window reloads.
-  // Called after each turn completes (streamEnd).
   function persistMessages() {
-    // Strip transient fields (streaming, expanded) to keep state clean
     const cleaned = messages.map((m) => ({
       id: m.id,
       role: m.role,
@@ -486,6 +722,48 @@
     }
   })
 
+  // Image paste from clipboard
+  inputEl.addEventListener('paste', (e) => {
+    const items = e.clipboardData?.items
+    if (!items) return
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault()
+        const file = item.getAsFile()
+        if (file) attachImageFromFile(file)
+      }
+    }
+  })
+
+  // Drag and drop images
+  inputRow.addEventListener('dragover', (e) => {
+    e.preventDefault()
+    inputRow.classList.add('drag-over')
+  })
+  inputRow.addEventListener('dragleave', () => {
+    inputRow.classList.remove('drag-over')
+  })
+  inputRow.addEventListener('drop', (e) => {
+    e.preventDefault()
+    inputRow.classList.remove('drag-over')
+    const files = e.dataTransfer?.files
+    if (!files) return
+    Array.from(files).forEach((f) => {
+      if (f.type.startsWith('image/')) attachImageFromFile(f)
+    })
+  })
+
+  attachBtn.addEventListener('click', () => {
+    imageFileInput.click()
+  })
+
+  imageFileInput.addEventListener('change', () => {
+    const files = imageFileInput.files
+    if (!files) return
+    Array.from(files).forEach(attachImageFromFile)
+    imageFileInput.value = ''
+  })
+
   sendBtn.addEventListener('click', () => {
     if (isStreaming) cancelStream()
     else sendMessage()
@@ -494,24 +772,60 @@
   newConvBtn.addEventListener('click', () => {
     if (isStreaming) return
     closeHistoryPanel()
+    closeSettingsPanel()
     vscode.postMessage({ type: 'newConversation' })
   })
 
-  historyBtn.addEventListener('click', () => {
-    toggleHistoryPanel()
-  })
-
+  historyBtn.addEventListener('click', toggleHistoryPanel)
   historyCloseBtn.addEventListener('click', closeHistoryPanel)
 
-  // Close history panel when clicking outside
+  settingsBtn.addEventListener('click', toggleSettingsPanel)
+  settingsCloseBtn.addEventListener('click', closeSettingsPanel)
+
+  // Effort buttons
+  effortBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const effort = btn.getAttribute('data-effort')
+      if (!effort) return
+      effortBtns.forEach((b) => b.classList.remove('active'))
+      btn.classList.add('active')
+      vscode.postMessage({
+        type: 'updateSetting',
+        payload: { key: 'effort', value: effort },
+      })
+    })
+  })
+
+  // Settings checkboxes + select
+  bindSetting(modelSelect, 'model')
+  bindSetting(includeActiveFileEl, 'includeActiveFile')
+  bindSetting(includeClaudeMdEl, 'includeClaudeMd')
+  bindSetting(enableMemoryEl, 'enableMemory')
+  bindSetting(enableMcpServersEl, 'enableMcpServers')
+
+  openVsSettingsBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'openSettings' })
+  })
+
+  // Close panels when clicking outside
   document.addEventListener('click', (e) => {
-    if (historyPanel.classList.contains('hidden')) return
     const target = /** @type {Node} */ (e.target)
+    // History
     if (
-      historyPanel.contains(target) ||
-      historyBtn.contains(target)
-    ) return
-    closeHistoryPanel()
+      !historyPanel.classList.contains('hidden') &&
+      !historyPanel.contains(target) &&
+      !historyBtn.contains(target)
+    ) {
+      closeHistoryPanel()
+    }
+    // Settings
+    if (
+      !settingsPanel.classList.contains('hidden') &&
+      !settingsPanel.contains(target) &&
+      !settingsBtn.contains(target)
+    ) {
+      closeSettingsPanel()
+    }
   })
 
   contextRemove.addEventListener('click', clearContextChip)
@@ -531,22 +845,44 @@
         if (Array.isArray(msg.payload?.conversations)) {
           conversations = msg.payload.conversations
         }
-        // Restore saved messages for active conversation
+        if (msg.payload?.context) {
+          contextInfo = msg.payload.context
+          renderContextStatus()
+        }
+        if (msg.payload?.usage) {
+          conversationUsage = msg.payload.usage
+        } else {
+          conversationUsage = null
+        }
         if (Array.isArray(msg.payload?.messages)) {
           messages = msg.payload.messages.map((m) => ({
             ...m,
-            streaming: false, // Any in-flight message from before reload is done
+            streaming: false,
           }))
         } else {
           messages = []
         }
+        // Welcome banner: shown once per session if there are existing conversations
+        if (!welcomeShown && conversations.length > 0) {
+          const totalMsgs = conversations.reduce(
+            (sum, c) => sum + (c.messageCount || 0),
+            0
+          )
+          if (totalMsgs > 0) {
+            const text = `ברוך שובך! יש לך ${conversations.length} שיחות שמורות (${totalMsgs} הודעות סך הכל). השיחה האחרונה שלך נטענה אוטומטית.`
+            showWelcomeBanner(text)
+          }
+        }
+        if (msg.payload?.settings) {
+          applySettingsToUI(msg.payload.settings)
+        }
         updateConversationTitle()
+        renderUsage()
         render()
         messagesEl.scrollTop = messagesEl.scrollHeight
         break
 
       case 'loadConversation':
-        // Switching to another conversation (or after delete)
         if (typeof msg.payload?.activeId === 'string') {
           activeConversationId = msg.payload.activeId
         }
@@ -558,9 +894,14 @@
         } else {
           messages = []
         }
+        if (msg.payload?.usage !== undefined) {
+          conversationUsage = msg.payload.usage
+        }
         currentAssistantId = null
         clearContextChip()
+        hideWelcomeBanner()
         updateConversationTitle()
+        renderUsage()
         render()
         messagesEl.scrollTop = messagesEl.scrollHeight
         break
@@ -573,10 +914,27 @@
           activeConversationId = msg.payload.activeId
         }
         updateConversationTitle()
-        // If history panel is open, re-render it
         if (!historyPanel.classList.contains('hidden')) {
           renderHistoryPanel()
         }
+        break
+
+      case 'cumulativeUsage':
+        conversationUsage = msg.payload
+        renderUsage()
+        break
+
+      case 'imageSaved': {
+        const id = msg.payload?.id
+        const path = msg.payload?.path
+        if (!id || !path) return
+        const img = pendingImages.find((p) => p.localId === id)
+        if (img) img.savedPath = path
+        break
+      }
+
+      case 'settingsState':
+        if (msg.payload) applySettingsToUI(msg.payload)
         break
 
       case 'streamStart':
@@ -603,6 +961,29 @@
         break
     }
   })
+
+  function applySettingsToUI(s) {
+    if (typeof s.model === 'string' && modelSelect) {
+      modelSelect.value = s.model
+    }
+    if (typeof s.effort === 'string') {
+      effortBtns.forEach((b) =>
+        b.classList.toggle('active', b.getAttribute('data-effort') === s.effort)
+      )
+    }
+    if (typeof s.includeActiveFile === 'boolean' && includeActiveFileEl) {
+      includeActiveFileEl.checked = s.includeActiveFile
+    }
+    if (typeof s.includeClaudeMd === 'boolean' && includeClaudeMdEl) {
+      includeClaudeMdEl.checked = s.includeClaudeMd
+    }
+    if (typeof s.enableMemory === 'boolean' && enableMemoryEl) {
+      enableMemoryEl.checked = s.enableMemory
+    }
+    if (typeof s.enableMcpServers === 'boolean' && enableMcpServersEl) {
+      enableMcpServersEl.checked = s.enableMcpServers
+    }
+  }
 
   function handleStreamEvent(event) {
     const msg = messages.find((m) => m.id === currentAssistantId)
@@ -633,6 +1014,15 @@
         render()
         break
       }
+
+      case 'usage':
+        // Live update of usage during streaming
+        if (!conversationUsage) {
+          conversationUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }
+        }
+        // Each event reports the current message's tokens. We add to a running total.
+        // Note: cumulative is finalized via 'cumulativeUsage' event after streamEnd.
+        break
 
       case 'error':
         msg.text += `\n\n**שגיאה:** ${event.message}`

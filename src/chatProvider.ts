@@ -6,7 +6,14 @@
 import * as vscode from 'vscode'
 import * as path from 'path'
 import * as fs from 'fs'
-import { runQuery, buildSystemPrompt, type StreamEvent } from './claudeClient'
+import * as os from 'os'
+import {
+  runQuery,
+  buildSystemPrompt,
+  loadProjectContext,
+  loadMcpServers,
+  type StreamEvent,
+} from './claudeClient'
 
 interface SelectionPayload {
   text: string
@@ -34,6 +41,13 @@ interface PersistedMessage {
   }>
 }
 
+interface TokenUsage {
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreate: number
+}
+
 interface Conversation {
   id: string
   title: string
@@ -41,6 +55,7 @@ interface Conversation {
   messages: PersistedMessage[]
   createdAt: number
   updatedAt: number
+  usage?: TokenUsage
 }
 
 // Storage keys
@@ -301,9 +316,56 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.openFile(msg.payload?.path, msg.payload?.line)
         break
 
+      case 'uploadImage': {
+        // Webview sends a base64 image; we save to a temp file and
+        // reply with the path so the next sendMessage can reference it
+        const dataUrl = msg.payload?.dataUrl
+        if (typeof dataUrl !== 'string') return
+        const tempPath = await this.saveTempImage(dataUrl)
+        this.postToWebview({
+          type: 'imageSaved',
+          payload: { path: tempPath, id: msg.payload?.id || null },
+        })
+        break
+      }
+
+      case 'openSettings': {
+        // Open VS Code settings filtered to our extension
+        await vscode.commands.executeCommand(
+          'workbench.action.openSettings',
+          '@ext:yhbrwbyn.rtl-claude'
+        )
+        break
+      }
+
+      case 'updateSetting': {
+        // Update a single VS Code setting from the in-extension panel
+        const key = msg.payload?.key
+        const value = msg.payload?.value
+        if (typeof key !== 'string') return
+        const config = vscode.workspace.getConfiguration('rtlClaude')
+        try {
+          await config.update(
+            key,
+            value,
+            vscode.ConfigurationTarget.Global
+          )
+        } catch (e) {
+          console.error('[RTL Claude] updateSetting failed:', e)
+        }
+        // Push fresh settings back so UI stays in sync
+        this.pushSettingsState()
+        break
+      }
+
       case 'ready': {
         // Webview is loaded — push initial state
         const active = this.ensureActiveConversation()
+        const workspaceRoot =
+          vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
+        const projectContext = loadProjectContext(workspaceRoot)
+        const mcpServers = loadMcpServers(workspaceRoot)
+
         this.postToWebview({
           type: 'init',
           payload: {
@@ -312,6 +374,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             activeId: active.id,
             messages: active.messages,
             conversations: this.summarizeConversations(),
+            usage: active.usage || null,
+            settings: this.getSettingsSnapshot(),
+            context: {
+              hasClaudeMd: Boolean(projectContext.claudeMd),
+              hasMemory: Boolean(projectContext.memoryIndex),
+              memoryFileCount: projectContext.memoryFileCount,
+              mcpServerCount: Object.keys(mcpServers).length,
+              mcpServerNames: Object.keys(mcpServers),
+            },
           },
         })
         // If a selection was queued before the webview was ready
@@ -362,7 +433,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await this.setActiveConversation(id)
     this.postToWebview({
       type: 'loadConversation',
-      payload: { activeId: id, messages: target.messages },
+      payload: {
+        activeId: id,
+        messages: target.messages,
+        usage: target.usage || null,
+      },
     })
     this.broadcastConversationsUpdated()
   }
@@ -375,7 +450,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const active = this.ensureActiveConversation()
     this.postToWebview({
       type: 'loadConversation',
-      payload: { activeId: active.id, messages: active.messages },
+      payload: {
+        activeId: active.id,
+        messages: active.messages,
+        usage: active.usage || null,
+      },
     })
     this.broadcastConversationsUpdated()
   }
@@ -401,6 +480,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     })
   }
 
+  // ─── Image temp file handling ──────────────────────────────────
+
+  private async saveTempImage(dataUrl: string): Promise<string> {
+    // Parse data URL: data:image/png;base64,XXXX
+    const match = dataUrl.match(/^data:(image\/\w+);base64,(.+)$/)
+    if (!match) {
+      throw new Error('Invalid image data URL')
+    }
+    const mime = match[1]
+    const base64 = match[2]
+    const ext = mime.split('/')[1] || 'png'
+
+    const tmpDir = path.join(os.tmpdir(), 'rtl-claude-images')
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true })
+    }
+
+    const filename = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+    const filePath = path.join(tmpDir, filename)
+    fs.writeFileSync(filePath, Buffer.from(base64, 'base64'))
+    return filePath
+  }
+
   // ─── Sending a message to Claude ───────────────────────────────
 
   private async handleSendMessage(text: string) {
@@ -411,8 +513,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const config = vscode.workspace.getConfiguration('rtlClaude')
     const model = config.get<string>('model', 'claude-opus-4-6')
+    const effort = config.get<'low' | 'medium' | 'max'>('effort', 'max')
     const maxTurns = config.get<number>('maxTurns', 50)
     const includeActiveFile = config.get<boolean>('includeActiveFile', true)
+    const enableMemory = config.get<boolean>('enableMemory', true)
+    const includeClaudeMd = config.get<boolean>('includeClaudeMd', true)
+    const enableMcpServers = config.get<boolean>('enableMcpServers', true)
 
     // Build the prompt with optional active file context
     let prompt = text
@@ -424,6 +530,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
+    // Load project context (CLAUDE.md + memory)
+    const projectContext = loadProjectContext(workspaceRoot)
+    if (!includeClaudeMd) projectContext.claudeMd = null
+    if (!enableMemory) projectContext.memoryIndex = null
+
+    // Load MCP servers
+    const mcpServers = enableMcpServers ? loadMcpServers(workspaceRoot) : {}
+
     const active = this.ensureActiveConversation()
     const resumeSessionId = active.sdkSessionId
 
@@ -431,15 +545,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     this.postToWebview({ type: 'streamStart' })
 
+    // Track usage across all assistant messages in this turn
+    let turnUsage: TokenUsage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheCreate: 0,
+    }
+
     try {
       const generator = runQuery({
         prompt,
-        systemPrompt: buildSystemPrompt(workspaceRoot),
+        systemPrompt: buildSystemPrompt(workspaceRoot, projectContext),
         cwd: workspaceRoot,
         resumeSessionId,
         model,
         maxTurns,
         signal: this.currentAbortController.signal,
+        mcpServers,
+        effort,
       })
 
       for await (const event of generator) {
@@ -450,12 +574,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           })
         }
 
+        // Accumulate token usage for this turn
+        if (event.type === 'usage') {
+          turnUsage.input += event.inputTokens
+          turnUsage.output += event.outputTokens
+          turnUsage.cacheRead += event.cacheReadTokens || 0
+          turnUsage.cacheCreate += event.cacheCreateTokens || 0
+        }
+
         this.postToWebview({ type: 'streamEvent', payload: event })
 
         if (event.type === 'done' || event.type === 'error') {
           break
         }
       }
+
+      // Add this turn's usage to the conversation total
+      const updatedUsage: TokenUsage = {
+        input: (active.usage?.input || 0) + turnUsage.input,
+        output: (active.usage?.output || 0) + turnUsage.output,
+        cacheRead: (active.usage?.cacheRead || 0) + turnUsage.cacheRead,
+        cacheCreate: (active.usage?.cacheCreate || 0) + turnUsage.cacheCreate,
+      }
+      await this.updateConversation(active.id, { usage: updatedUsage })
+
+      // Push final cumulative usage so the UI can show it
+      this.postToWebview({
+        type: 'cumulativeUsage',
+        payload: updatedUsage,
+      })
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
       this.postToWebview({
@@ -504,6 +651,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private postToWebview(msg: any) {
     this.view?.webview.postMessage(msg)
+  }
+
+  private getSettingsSnapshot() {
+    const config = vscode.workspace.getConfiguration('rtlClaude')
+    return {
+      model: config.get<string>('model', 'claude-opus-4-6'),
+      effort: config.get<string>('effort', 'max'),
+      maxTurns: config.get<number>('maxTurns', 50),
+      includeActiveFile: config.get<boolean>('includeActiveFile', true),
+      includeClaudeMd: config.get<boolean>('includeClaudeMd', true),
+      enableMemory: config.get<boolean>('enableMemory', true),
+      enableMcpServers: config.get<boolean>('enableMcpServers', true),
+    }
+  }
+
+  private pushSettingsState() {
+    this.postToWebview({
+      type: 'settingsState',
+      payload: this.getSettingsSnapshot(),
+    })
   }
 
   // ─── HTML ──────────────────────────────────────────────────────
