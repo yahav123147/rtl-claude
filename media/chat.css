@@ -367,6 +367,42 @@ body {
   font-weight: 700;
 }
 
+.permission-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.permission-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--vscode-foreground);
+  font-family: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.permission-btn:hover:not(.active) {
+  background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.05));
+}
+
+.permission-btn.active {
+  background: linear-gradient(135deg, rgba(245,158,11,0.2), rgba(217,119,6,0.1));
+  border-color: rgba(245,158,11,0.5);
+  font-weight: 600;
+}
+
+.permission-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
 .context-status {
   background: var(--vscode-input-background);
   border: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.1));

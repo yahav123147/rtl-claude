@@ -563,6 +563,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const enableMemory = config.get<boolean>('enableMemory', true)
     const includeClaudeMd = config.get<boolean>('includeClaudeMd', true)
     const enableMcpServers = config.get<boolean>('enableMcpServers', true)
+    const permissionMode = config.get<string>('permissionMode', 'bypassPermissions') as
+      | 'default'
+      | 'acceptEdits'
+      | 'plan'
+      | 'bypassPermissions'
 
     // Build the prompt with optional active file context
     let prompt = text
@@ -608,6 +613,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         signal: this.currentAbortController.signal,
         mcpServers,
         effort,
+        permissionMode,
       })
 
       for await (const event of generator) {
@@ -819,6 +825,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       includeClaudeMd: config.get<boolean>('includeClaudeMd', true),
       enableMemory: config.get<boolean>('enableMemory', true),
       enableMcpServers: config.get<boolean>('enableMcpServers', true),
+      permissionMode: config.get<string>('permissionMode', 'bypassPermissions'),
     }
   }
 

@@ -131,6 +131,23 @@
           "type": "boolean",
           "default": true,
           "description": "טען MCP servers מ-~/.claude.json (גלובליים ופרויקט-ספציפיים)"
+        },
+        "rtlClaude.permissionMode": {
+          "type": "string",
+          "enum": [
+            "default",
+            "acceptEdits",
+            "plan",
+            "bypassPermissions"
+          ],
+          "enumDescriptions": [
+            "שואל לפני עריכות — Claude ישאל אישור לפני כל שינוי",
+            "עורך אוטומטית — Claude יערוך בלי לשאול",
+            "מצב תכנון — Claude יחקור את הקוד ויציג תוכנית לפני שינויים",
+            "עוקף הרשאות — Claude לא ישאל אישור לפני פעולות מסוכנות"
+          ],
+          "default": "bypassPermissions",
+          "description": "מצב הרשאות — כמה חופש לתת ל-Claude"
         }
       }
     }

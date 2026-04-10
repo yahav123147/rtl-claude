@@ -25,6 +25,7 @@ export interface QueryOptions {
   signal?: AbortSignal
   mcpServers?: Record<string, unknown>
   effort?: 'low' | 'medium' | 'max'
+  permissionMode?: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
 }
 
 export type StreamEvent =
@@ -72,8 +73,9 @@ export async function* runQuery(
           'WebSearch',
           'TodoWrite',
         ],
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
+        permissionMode: options.permissionMode || 'bypassPermissions',
+        allowDangerouslySkipPermissions:
+          (options.permissionMode || 'bypassPermissions') === 'bypassPermissions',
         cwd: options.cwd,
         model:
           options.model && options.model !== 'inherit'

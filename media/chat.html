@@ -112,6 +112,28 @@
           <p class="setting-hint">מ-~/.claude.json (גלובלי + פרויקט-ספציפי)</p>
         </div>
 
+        <div class="setting-group">
+          <label class="setting-label">הרשאות</label>
+          <div class="permission-buttons">
+            <button class="permission-btn" data-mode="default" title="שואל לפני עריכות">
+              <span class="permission-icon">✋</span>
+              <span>שואל לפני עריכות</span>
+            </button>
+            <button class="permission-btn" data-mode="acceptEdits" title="עורך אוטומטית">
+              <span class="permission-icon">&lt;/&gt;</span>
+              <span>עורך אוטומטית</span>
+            </button>
+            <button class="permission-btn" data-mode="plan" title="מצב תכנון">
+              <span class="permission-icon">📋</span>
+              <span>מצב תכנון</span>
+            </button>
+            <button class="permission-btn active" data-mode="bypassPermissions" title="עוקף הרשאות">
+              <span class="permission-icon">⚡</span>
+              <span>עוקף הרשאות</span>
+            </button>
+          </div>
+        </div>
+
         <div class="setting-group setting-context-status">
           <div class="setting-label">מצב נוכחי</div>
           <div id="contextStatus" class="context-status"></div>

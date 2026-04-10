@@ -69,6 +69,7 @@
   const contextStatusEl = document.getElementById('contextStatus')
   const openVsSettingsBtn = document.getElementById('openVsSettingsBtn')
   const effortBtns = document.querySelectorAll('.effort-btn')
+  const permissionBtns = document.querySelectorAll('.permission-btn')
 
   // ─── Tool labels ────────────────────────────────────────────
   const TOOL_LABELS = {
@@ -1027,6 +1028,20 @@
     })
   })
 
+  // Permission mode buttons
+  permissionBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const mode = btn.getAttribute('data-mode')
+      if (!mode) return
+      permissionBtns.forEach((b) => b.classList.remove('active'))
+      btn.classList.add('active')
+      vscode.postMessage({
+        type: 'updateSetting',
+        payload: { key: 'permissionMode', value: mode },
+      })
+    })
+  })
+
   // Settings checkboxes + select
   bindSetting(modelSelect, 'model')
   bindSetting(includeActiveFileEl, 'includeActiveFile')
@@ -1310,6 +1325,11 @@
     }
     if (typeof s.enableMcpServers === 'boolean' && enableMcpServersEl) {
       enableMcpServersEl.checked = s.enableMcpServers
+    }
+    if (typeof s.permissionMode === 'string') {
+      permissionBtns.forEach((b) =>
+        b.classList.toggle('active', b.getAttribute('data-mode') === s.permissionMode)
+      )
     }
   }
 
