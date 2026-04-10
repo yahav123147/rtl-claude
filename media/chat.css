@@ -1082,6 +1082,219 @@ kbd {
   font-weight: 600;
 }
 
+/* ─── Search modal (Cmd+K) ────────────────────────────────── */
+
+.search-modal {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 60px;
+  animation: fadeIn 0.12s ease;
+}
+
+.search-modal.hidden { display: none; }
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.search-modal-inner {
+  width: 90%;
+  max-width: 440px;
+  max-height: 60vh;
+  background: var(--vscode-dropdown-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-dropdown-border, rgba(255,255,255,0.2));
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.search-input {
+  width: 100%;
+  padding: 12px 14px;
+  border: none;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.1));
+  background: transparent;
+  color: var(--vscode-foreground);
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.search-results {
+  overflow-y: auto;
+  flex: 1;
+  padding: 4px 0;
+}
+
+.search-result-item {
+  padding: 8px 14px;
+  cursor: pointer;
+  border-right: 2px solid transparent;
+  transition: background 0.1s ease;
+}
+
+.search-result-item:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.05));
+}
+
+.search-result-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+.search-result-snippet {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-empty {
+  padding: 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* ─── @ mention dropdown ──────────────────────────────────── */
+
+.mention-dropdown {
+  position: absolute;
+  bottom: 120px;
+  left: 12px;
+  right: 12px;
+  max-height: 200px;
+  background: var(--vscode-dropdown-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-dropdown-border, rgba(255,255,255,0.2));
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  z-index: 150;
+  overflow-y: auto;
+  animation: slideDown 0.12s ease-out;
+}
+
+.mention-dropdown.hidden { display: none; }
+
+.mention-results {
+  padding: 4px 0;
+}
+
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--vscode-foreground);
+  transition: background 0.1s ease;
+}
+
+.mention-item:hover, .mention-item.selected {
+  background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.06));
+}
+
+.mention-item-icon {
+  color: var(--vscode-descriptionForeground);
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.mention-item-path {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  direction: ltr;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── Code block actions ─────────────────────────────────── */
+
+.assistant-text pre {
+  position: relative;
+}
+
+.code-block-actions {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.assistant-text pre:hover .code-block-actions {
+  opacity: 1;
+}
+
+.code-action-btn {
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.2));
+  color: var(--vscode-foreground);
+  font-family: inherit;
+  font-size: 10px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  transition: all 0.1s ease;
+}
+
+.code-action-btn:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(255,255,255,0.1));
+}
+
+.code-action-btn.success {
+  border-color: rgba(16,185,129,0.5);
+  color: #10b981;
+}
+
+/* ─── Thinking indicator ─────────────────────────────────── */
+
+.thinking-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.thinking-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(245,158,11,0.2);
+  border-top-color: #f59e0b;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.thinking-text {
+  font-style: italic;
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ─── Scrollbar (subtle) ──────────────────────────────────── */
 
 ::-webkit-scrollbar {

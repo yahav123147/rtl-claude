@@ -123,6 +123,19 @@
       </div>
     </div>
 
+    <!-- Search modal (Cmd+K) -->
+    <div id="searchModal" class="search-modal hidden">
+      <div class="search-modal-inner">
+        <input id="searchInput" type="text" class="search-input" placeholder="חפש בשיחות..." dir="rtl" />
+        <div id="searchResults" class="search-results"></div>
+      </div>
+    </div>
+
+    <!-- @ mention dropdown (floats above input) -->
+    <div id="mentionDropdown" class="mention-dropdown hidden">
+      <div id="mentionResults" class="mention-results"></div>
+    </div>
+
     <main class="messages" id="messages">
       <div id="welcomeBanner" class="welcome-banner hidden"></div>
       <div class="empty-state" id="emptyState">

@@ -358,6 +358,41 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break
       }
 
+      case 'fuzzySearchFiles': {
+        const query = String(msg.payload?.query || '')
+        const results = await this.fuzzySearchFiles(query)
+        this.postToWebview({
+          type: 'fileSearchResults',
+          payload: { query, results },
+        })
+        break
+      }
+
+      case 'searchConversations': {
+        const query = String(msg.payload?.query || '')
+        const results = this.searchConversations(query)
+        this.postToWebview({
+          type: 'conversationSearchResults',
+          payload: { query, results },
+        })
+        break
+      }
+
+      case 'applyCodeToFile': {
+        const filePath = msg.payload?.filePath
+        const code = msg.payload?.code
+        if (typeof filePath !== 'string' || typeof code !== 'string') return
+        await this.applyCodeToFile(filePath, code)
+        break
+      }
+
+      case 'insertCodeAtCursor': {
+        const code = msg.payload?.code
+        if (typeof code !== 'string') return
+        await this.insertCodeAtCursor(code)
+        break
+      }
+
       case 'ready': {
         // Webview is loaded — push initial state
         const active = this.ensureActiveConversation()
@@ -647,6 +682,116 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } catch (err) {
       vscode.window.showWarningMessage(`לא הצלחתי לפתוח: ${filePath}`)
     }
+  }
+
+  // ─── Fuzzy file search (@ mentions) ─────────────────────────
+
+  private async fuzzySearchFiles(query: string): Promise<string[]> {
+    if (!query || query.length < 1) return []
+    const workspaceRoot =
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''
+    if (!workspaceRoot) return []
+
+    try {
+      // Use VS Code's findFiles with a glob pattern
+      const pattern = `**/*${query.replace(/\s+/g, '*')}*`
+      const uris = await vscode.workspace.findFiles(
+        pattern,
+        '**/node_modules/**',
+        20 // limit
+      )
+      return uris
+        .map((uri) => vscode.workspace.asRelativePath(uri))
+        .sort((a, b) => a.length - b.length) // shorter paths first
+    } catch {
+      return []
+    }
+  }
+
+  // ─── Conversation search ───────────────────────────────────
+
+  private searchConversations(
+    query: string
+  ): Array<{ id: string; title: string; matchLine: string }> {
+    if (!query || query.length < 2) return []
+
+    const q = query.toLowerCase()
+    const results: Array<{ id: string; title: string; matchLine: string }> = []
+    const all = this.getConversations()
+
+    for (const conv of all) {
+      // Search in title
+      if (conv.title.toLowerCase().includes(q)) {
+        results.push({
+          id: conv.id,
+          title: conv.title,
+          matchLine: conv.title,
+        })
+        continue
+      }
+      // Search in message text
+      for (const msg of conv.messages) {
+        if (msg.text.toLowerCase().includes(q)) {
+          // Extract a snippet around the match
+          const idx = msg.text.toLowerCase().indexOf(q)
+          const start = Math.max(0, idx - 30)
+          const end = Math.min(msg.text.length, idx + query.length + 30)
+          const snippet =
+            (start > 0 ? '...' : '') +
+            msg.text.slice(start, end).replace(/\n/g, ' ') +
+            (end < msg.text.length ? '...' : '')
+          results.push({
+            id: conv.id,
+            title: conv.title,
+            matchLine: snippet,
+          })
+          break // one match per conversation is enough
+        }
+      }
+      if (results.length >= 15) break
+    }
+
+    return results
+  }
+
+  // ─── Code block actions ────────────────────────────────────
+
+  private async applyCodeToFile(
+    filePath: string,
+    code: string
+  ): Promise<void> {
+    const workspaceRoot =
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || ''
+    const absPath = path.isAbsolute(filePath)
+      ? filePath
+      : path.join(workspaceRoot, filePath)
+
+    try {
+      const uri = vscode.Uri.file(absPath)
+      const encoder = new TextEncoder()
+      await vscode.workspace.fs.writeFile(uri, encoder.encode(code))
+      const doc = await vscode.workspace.openTextDocument(uri)
+      await vscode.window.showTextDocument(doc, {
+        preview: false,
+        viewColumn: vscode.ViewColumn.One,
+      })
+      vscode.window.showInformationMessage(`נכתב ל-${filePath}`)
+    } catch (err) {
+      vscode.window.showWarningMessage(
+        `לא הצלחתי לכתוב ל-${filePath}: ${err}`
+      )
+    }
+  }
+
+  private async insertCodeAtCursor(code: string): Promise<void> {
+    const editor = vscode.window.activeTextEditor
+    if (!editor) {
+      vscode.window.showWarningMessage('אין עורך פתוח להכנסת קוד')
+      return
+    }
+    await editor.edit((editBuilder) => {
+      editBuilder.insert(editor.selection.active, code)
+    })
   }
 
   private postToWebview(msg: any) {

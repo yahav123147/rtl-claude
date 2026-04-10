@@ -23,6 +23,13 @@
   let contextInfo = null
   /** Whether welcome banner has been shown this session */
   let welcomeShown = false
+  /** Current thinking text (for thinking indicator) */
+  let currentThinkingText = ''
+  /** @ mention state */
+  let mentionActive = false
+  let mentionQuery = ''
+  let mentionSelectedIndex = 0
+  let mentionFileResults = []
 
   // ─── DOM refs ───────────────────────────────────────────────
   const messagesEl = document.getElementById('messages')
@@ -48,6 +55,11 @@
   const imageChipsContainer = document.getElementById('imageChips')
   const usageDisplay = document.getElementById('usageDisplay')
   const inputRow = document.querySelector('.input-row')
+  const searchModal = document.getElementById('searchModal')
+  const searchInput = /** @type {HTMLInputElement} */ (document.getElementById('searchInput'))
+  const searchResults = document.getElementById('searchResults')
+  const mentionDropdown = document.getElementById('mentionDropdown')
+  const mentionResults = document.getElementById('mentionResults')
   // Settings inputs
   const modelSelect = /** @type {HTMLSelectElement} */ (document.getElementById('modelSelect'))
   const includeActiveFileEl = /** @type {HTMLInputElement} */ (document.getElementById('includeActiveFile'))
@@ -169,7 +181,6 @@
       }
 
       if (msg.text) {
-        // Wrap so we can position the copy button
         const textWrapper = document.createElement('div')
         textWrapper.className = 'message-text-wrapper'
 
@@ -177,32 +188,25 @@
         textEl.className = 'assistant-text'
         textEl.innerHTML = renderMarkdown(msg.text)
         attachLinkHandlers(textEl)
+        attachCodeBlockActions(textEl)
         textWrapper.appendChild(textEl)
 
         // Copy button (only for non-streaming completed messages)
         if (!msg.streaming) {
-          const copyBtn = document.createElement('button')
-          copyBtn.className = 'copy-btn'
-          copyBtn.title = 'העתק'
-          copyBtn.innerHTML =
-            '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
-          copyBtn.addEventListener('click', () => {
-            navigator.clipboard.writeText(msg.text).then(() => {
-              copyBtn.classList.add('copied')
-              copyBtn.innerHTML =
-                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
-              setTimeout(() => {
-                copyBtn.classList.remove('copied')
-                copyBtn.innerHTML =
-                  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
-              }, 1500)
-            })
-          })
+          const copyBtn = createCopyButton(() => msg.text)
           textWrapper.appendChild(copyBtn)
         }
 
         content.appendChild(textWrapper)
-      } else if (msg.streaming) {
+      }
+
+      // Thinking indicator (during streaming, before text arrives)
+      if (msg.streaming && !msg.text && currentThinkingText && msg.id === currentAssistantId) {
+        const thinking = document.createElement('div')
+        thinking.className = 'thinking-indicator'
+        thinking.innerHTML = `<div class="thinking-spinner"></div><span class="thinking-text">${escapeHtml(currentThinkingText)}</span>`
+        content.appendChild(thinking)
+      } else if (msg.streaming && !msg.text && msg.tools.length === 0 && msg.id === currentAssistantId) {
         const dots = document.createElement('div')
         dots.className = 'streaming-dots'
         dots.innerHTML = '<span></span><span></span><span></span>'
@@ -282,6 +286,106 @@
     }
 
     return card
+  }
+
+  function escapeHtml(text) {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+
+  function createCopyButton(getText) {
+    const COPY_SVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+    const CHECK_SVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+    const btn = document.createElement('button')
+    btn.className = 'copy-btn'
+    btn.title = 'העתק'
+    btn.innerHTML = COPY_SVG
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(getText()).then(() => {
+        btn.classList.add('copied')
+        btn.innerHTML = CHECK_SVG
+        setTimeout(() => {
+          btn.classList.remove('copied')
+          btn.innerHTML = COPY_SVG
+        }, 1500)
+      })
+    })
+    return btn
+  }
+
+  function attachCodeBlockActions(container) {
+    const pres = container.querySelectorAll('pre')
+    pres.forEach((pre) => {
+      const codeEl = pre.querySelector('code')
+      if (!codeEl) return
+      const code = codeEl.textContent || ''
+      if (!code.trim()) return
+
+      // Detect language from class (e.g. language-tsx → tsx)
+      const langMatch = codeEl.className.match(/language-(\S+)/)
+      const lang = langMatch ? langMatch[1] : ''
+
+      const actionsDiv = document.createElement('div')
+      actionsDiv.className = 'code-block-actions'
+
+      // Copy
+      const copyBtn = document.createElement('button')
+      copyBtn.className = 'code-action-btn'
+      copyBtn.textContent = 'העתק'
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(code).then(() => {
+          copyBtn.textContent = '✓'
+          copyBtn.classList.add('success')
+          setTimeout(() => {
+            copyBtn.textContent = 'העתק'
+            copyBtn.classList.remove('success')
+          }, 1500)
+        })
+      })
+      actionsDiv.appendChild(copyBtn)
+
+      // Apply to file (only if language hint exists to suggest a filename)
+      if (lang) {
+        const applyBtn = document.createElement('button')
+        applyBtn.className = 'code-action-btn'
+        applyBtn.textContent = 'שמור לקובץ'
+        applyBtn.addEventListener('click', () => {
+          const filePath = prompt(`נתיב הקובץ לשמירה (יחסי לפרויקט):`, `example.${lang}`)
+          if (!filePath) return
+          vscode.postMessage({
+            type: 'applyCodeToFile',
+            payload: { filePath, code },
+          })
+          applyBtn.textContent = '✓ נשמר'
+          applyBtn.classList.add('success')
+          setTimeout(() => {
+            applyBtn.textContent = 'שמור לקובץ'
+            applyBtn.classList.remove('success')
+          }, 2000)
+        })
+        actionsDiv.appendChild(applyBtn)
+      }
+
+      // Insert at cursor
+      const insertBtn = document.createElement('button')
+      insertBtn.className = 'code-action-btn'
+      insertBtn.textContent = 'הכנס בעורך'
+      insertBtn.addEventListener('click', () => {
+        vscode.postMessage({
+          type: 'insertCodeAtCursor',
+          payload: { code },
+        })
+        insertBtn.textContent = '✓'
+        insertBtn.classList.add('success')
+        setTimeout(() => {
+          insertBtn.textContent = 'הכנס בעורך'
+          insertBtn.classList.remove('success')
+        }, 1500)
+      })
+      actionsDiv.appendChild(insertBtn)
+
+      pre.style.position = 'relative'
+      pre.appendChild(actionsDiv)
+    })
   }
 
   function attachLinkHandlers(container) {
@@ -661,15 +765,12 @@
     }
     const inputK = (conversationUsage.input / 1000).toFixed(1)
     const outputK = (conversationUsage.output / 1000).toFixed(1)
-    // Rough Opus pricing (Apr 2026): $15/M input, $75/M output
-    const cost =
-      (conversationUsage.input * 15) / 1_000_000 +
-      (conversationUsage.output * 75) / 1_000_000
+    const totalK = ((conversationUsage.input + conversationUsage.output) / 1000).toFixed(1)
     const cacheNote =
       conversationUsage.cacheRead > 0
-        ? ` · ${(conversationUsage.cacheRead / 1000).toFixed(1)}K cached`
+        ? ` · ${(conversationUsage.cacheRead / 1000).toFixed(1)}K cache`
         : ''
-    usageDisplay.innerHTML = `<span class="usage-item">${inputK}K → ${outputK}K tokens${cacheNote}</span><span class="usage-cost">~$${cost.toFixed(3)}</span>`
+    usageDisplay.innerHTML = `<span class="usage-item">${inputK}K in · ${outputK}K out · ${totalK}K total${cacheNote}</span>`
     usageDisplay.classList.remove('hidden')
   }
 
@@ -721,6 +822,89 @@
       sendMessage()
     }
   })
+
+  // @ mention tracking on input
+  inputEl.addEventListener('input', handleMentionInput)
+  inputEl.addEventListener('keydown', handleMentionKeydown)
+
+  function handleMentionInput() {
+    const text = inputEl.value
+    const cursorPos = inputEl.selectionStart || 0
+    // Find the last @ before cursor that isn't preceded by a non-space char
+    const before = text.slice(0, cursorPos)
+    const atMatch = before.match(/(^|[\s\n])@(\S*)$/)
+    if (atMatch) {
+      mentionActive = true
+      mentionQuery = atMatch[2]
+      mentionSelectedIndex = 0
+      vscode.postMessage({
+        type: 'fuzzySearchFiles',
+        payload: { query: mentionQuery },
+      })
+    } else {
+      closeMentionDropdown()
+    }
+  }
+
+  function handleMentionKeydown(e) {
+    if (!mentionActive || mentionFileResults.length === 0) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      mentionSelectedIndex = Math.min(mentionSelectedIndex + 1, mentionFileResults.length - 1)
+      renderMentionDropdown()
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      mentionSelectedIndex = Math.max(mentionSelectedIndex - 1, 0)
+      renderMentionDropdown()
+    } else if (e.key === 'Enter' && mentionActive) {
+      e.preventDefault()
+      e.stopPropagation()
+      selectMention(mentionFileResults[mentionSelectedIndex])
+    } else if (e.key === 'Escape') {
+      closeMentionDropdown()
+    }
+  }
+
+  function renderMentionDropdown() {
+    mentionResults.innerHTML = ''
+    if (mentionFileResults.length === 0) {
+      closeMentionDropdown()
+      return
+    }
+    mentionDropdown.classList.remove('hidden')
+    mentionFileResults.forEach((filePath, i) => {
+      const item = document.createElement('div')
+      item.className = 'mention-item' + (i === mentionSelectedIndex ? ' selected' : '')
+      item.innerHTML = `<span class="mention-item-icon">📄</span><span class="mention-item-path">${escapeHtml(filePath)}</span>`
+      item.addEventListener('click', () => selectMention(filePath))
+      mentionResults.appendChild(item)
+    })
+  }
+
+  function selectMention(filePath) {
+    if (!filePath) return
+    const text = inputEl.value
+    const cursorPos = inputEl.selectionStart || 0
+    const before = text.slice(0, cursorPos)
+    const after = text.slice(cursorPos)
+    // Replace @query with the file reference
+    const atIdx = before.lastIndexOf('@')
+    if (atIdx === -1) return
+    const newBefore = before.slice(0, atIdx) + '`' + filePath + '` '
+    inputEl.value = newBefore + after
+    inputEl.selectionStart = inputEl.selectionEnd = newBefore.length
+    closeMentionDropdown()
+    inputEl.focus()
+    autosizeInput()
+    updateSendButton()
+  }
+
+  function closeMentionDropdown() {
+    mentionActive = false
+    mentionQuery = ''
+    mentionFileResults = []
+    mentionDropdown.classList.add('hidden')
+  }
 
   // Image paste from clipboard
   inputEl.addEventListener('paste', (e) => {
@@ -830,6 +1014,88 @@
 
   contextRemove.addEventListener('click', clearContextChip)
 
+  // ─── Search modal (Cmd+K) ──────────────────────────────────
+
+  document.addEventListener('keydown', (e) => {
+    // Cmd+K opens search
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault()
+      openSearchModal()
+    }
+    // Esc closes search
+    if (e.key === 'Escape' && !searchModal.classList.contains('hidden')) {
+      e.preventDefault()
+      closeSearchModal()
+    }
+  })
+
+  searchModal.addEventListener('click', (e) => {
+    // Close on backdrop click
+    if (e.target === searchModal) closeSearchModal()
+  })
+
+  let searchDebounce = null
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchDebounce)
+    searchDebounce = setTimeout(() => {
+      const q = searchInput.value.trim()
+      if (q.length < 2) {
+        searchResults.innerHTML = '<div class="search-empty">הקלד לפחות 2 תווים...</div>'
+        return
+      }
+      vscode.postMessage({
+        type: 'searchConversations',
+        payload: { query: q },
+      })
+    }, 200)
+  })
+
+  function openSearchModal() {
+    closeHistoryPanel()
+    closeSettingsPanel()
+    searchModal.classList.remove('hidden')
+    searchInput.value = ''
+    searchResults.innerHTML = '<div class="search-empty">חפש בתוך כל השיחות...</div>'
+    setTimeout(() => searchInput.focus(), 50)
+  }
+
+  function closeSearchModal() {
+    searchModal.classList.add('hidden')
+  }
+
+  function renderSearchResults(results) {
+    searchResults.innerHTML = ''
+    if (results.length === 0) {
+      searchResults.innerHTML = '<div class="search-empty">לא נמצאו תוצאות</div>'
+      return
+    }
+    for (const r of results) {
+      const item = document.createElement('div')
+      item.className = 'search-result-item'
+
+      const title = document.createElement('div')
+      title.className = 'search-result-title'
+      title.textContent = r.title || 'שיחה ללא כותרת'
+      item.appendChild(title)
+
+      const snippet = document.createElement('div')
+      snippet.className = 'search-result-snippet'
+      snippet.textContent = r.matchLine
+      item.appendChild(snippet)
+
+      item.addEventListener('click', () => {
+        closeSearchModal()
+        if (r.id === activeConversationId) return
+        vscode.postMessage({
+          type: 'switchConversation',
+          payload: { id: r.id },
+        })
+      })
+
+      searchResults.appendChild(item)
+    }
+  }
+
   // ─── Receive messages from extension host ───────────────────
 
   window.addEventListener('message', (event) => {
@@ -937,13 +1203,28 @@
         if (msg.payload) applySettingsToUI(msg.payload)
         break
 
+      case 'fileSearchResults':
+        if (mentionActive) {
+          mentionFileResults = Array.isArray(msg.payload?.results) ? msg.payload.results : []
+          renderMentionDropdown()
+        }
+        break
+
+      case 'conversationSearchResults':
+        if (Array.isArray(msg.payload?.results)) {
+          renderSearchResults(msg.payload.results)
+        }
+        break
+
       case 'streamStart':
         isStreaming = true
+        currentThinkingText = ''
         updateSendButton()
         break
 
       case 'streamEnd':
         isStreaming = false
+        currentThinkingText = ''
         const lastMsg = messages.find((m) => m.id === currentAssistantId)
         if (lastMsg) lastMsg.streaming = false
         currentAssistantId = null
@@ -992,6 +1273,7 @@
     switch (event.type) {
       case 'text':
         msg.text += event.text
+        currentThinkingText = '' // stop thinking indicator once text arrives
         render()
         break
 
@@ -1015,13 +1297,13 @@
         break
       }
 
+      case 'thinking':
+        currentThinkingText = event.text || 'חושב...'
+        render()
+        break
+
       case 'usage':
-        // Live update of usage during streaming
-        if (!conversationUsage) {
-          conversationUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }
-        }
-        // Each event reports the current message's tokens. We add to a running total.
-        // Note: cumulative is finalized via 'cumulativeUsage' event after streamEnd.
+        // Cumulative is finalized via 'cumulativeUsage' event after streamEnd.
         break
 
       case 'error':
