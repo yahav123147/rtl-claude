@@ -461,13 +461,22 @@
     if (!text && pendingImages.length === 0) return
     if (isStreaming) return
 
-    // Wait for any pending images to be saved
+    // Wait for any pending images to be saved (max 5 sec)
     const unsavedImages = pendingImages.filter((img) => !img.savedPath)
     if (unsavedImages.length > 0) {
-      // Defer until images are saved (handled by imageSaved message)
-      setTimeout(sendMessage, 100)
-      return
+      if (!sendMessage._retries) sendMessage._retries = 0
+      sendMessage._retries++
+      if (sendMessage._retries > 50) { // 50 * 100ms = 5 seconds
+        sendMessage._retries = 0
+        // Give up waiting, remove unsaved images
+        pendingImages = pendingImages.filter((img) => img.savedPath)
+        renderImageChips()
+      } else {
+        setTimeout(sendMessage, 100)
+        return
+      }
     }
+    sendMessage._retries = 0
 
     // Build the full text with images and selection
     let fullText = text || ''
@@ -854,6 +863,8 @@
 
   inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
+      // Don't send if @ mention dropdown is active — let mention handler take over
+      if (mentionActive && mentionFileResults.length > 0) return
       e.preventDefault()
       sendMessage()
     }

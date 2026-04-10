@@ -5,7 +5,6 @@
  * doesn't bail out when we're already running inside Antigravity.
  */
 
-import * as vscode from 'vscode'
 import * as path from 'path'
 import * as fs from 'fs'
 import * as os from 'os'

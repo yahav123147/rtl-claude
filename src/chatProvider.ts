@@ -121,7 +121,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.broadcastConversationsUpdated()
     this.postToWebview({
       type: 'loadConversation',
-      payload: { activeId: newConv.id, messages: [] },
+      payload: { activeId: newConv.id, messages: [], usage: null },
     })
   }
 
@@ -317,15 +317,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break
 
       case 'uploadImage': {
-        // Webview sends a base64 image; we save to a temp file and
-        // reply with the path so the next sendMessage can reference it
         const dataUrl = msg.payload?.dataUrl
         if (typeof dataUrl !== 'string') return
-        const tempPath = await this.saveTempImage(dataUrl)
-        this.postToWebview({
-          type: 'imageSaved',
-          payload: { path: tempPath, id: msg.payload?.id || null },
-        })
+        try {
+          const tempPath = await this.saveTempImage(dataUrl)
+          this.postToWebview({
+            type: 'imageSaved',
+            payload: { path: tempPath, id: msg.payload?.id || null },
+          })
+        } catch (e) {
+          console.error('[RTL Claude] Failed to save image:', e)
+          this.postToWebview({
+            type: 'streamEvent',
+            payload: {
+              type: 'error',
+              message: `שגיאה בשמירת תמונה: ${e instanceof Error ? e.message : String(e)}`,
+            },
+          })
+        }
         break
       }
 
@@ -624,12 +633,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
 
-      // Add this turn's usage to the conversation total
+      // Re-fetch conversation to get current usage (active was captured before streaming)
+      const freshConv = this.getActiveConversation()
+      const prevUsage = freshConv?.usage || active.usage
       const updatedUsage: TokenUsage = {
-        input: (active.usage?.input || 0) + turnUsage.input,
-        output: (active.usage?.output || 0) + turnUsage.output,
-        cacheRead: (active.usage?.cacheRead || 0) + turnUsage.cacheRead,
-        cacheCreate: (active.usage?.cacheCreate || 0) + turnUsage.cacheCreate,
+        input: (prevUsage?.input || 0) + turnUsage.input,
+        output: (prevUsage?.output || 0) + turnUsage.output,
+        cacheRead: (prevUsage?.cacheRead || 0) + turnUsage.cacheRead,
+        cacheCreate: (prevUsage?.cacheCreate || 0) + turnUsage.cacheCreate,
       }
       await this.updateConversation(active.id, { usage: updatedUsage })
 
