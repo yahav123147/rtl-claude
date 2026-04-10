@@ -349,18 +349,41 @@
         applyBtn.className = 'code-action-btn'
         applyBtn.textContent = 'שמור לקובץ'
         applyBtn.addEventListener('click', () => {
-          const filePath = prompt(`נתיב הקובץ לשמירה (יחסי לפרויקט):`, `example.${lang}`)
-          if (!filePath) return
-          vscode.postMessage({
-            type: 'applyCodeToFile',
-            payload: { filePath, code },
+          // prompt() doesn't work in webview — use inline input
+          if (applyBtn._inputMode) return
+          applyBtn._inputMode = true
+          const wrapper = document.createElement('span')
+          wrapper.style.display = 'inline-flex'
+          wrapper.style.alignItems = 'center'
+          wrapper.style.gap = '3px'
+          const inp = document.createElement('input')
+          inp.type = 'text'
+          inp.value = `example.${lang}`
+          inp.style.cssText = 'width:140px;font-size:10px;padding:2px 4px;border:1px solid var(--vscode-focusBorder,#f59e0b);border-radius:3px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);direction:ltr;font-family:var(--vscode-editor-font-family,monospace);'
+          const okBtn = document.createElement('button')
+          okBtn.className = 'code-action-btn'
+          okBtn.textContent = '✓'
+          okBtn.style.padding = '2px 5px'
+          wrapper.appendChild(inp)
+          wrapper.appendChild(okBtn)
+          applyBtn.replaceWith(wrapper)
+          inp.focus()
+          inp.select()
+          const submit = () => {
+            const filePath = inp.value.trim()
+            if (!filePath) { wrapper.replaceWith(applyBtn); applyBtn._inputMode = false; return }
+            vscode.postMessage({ type: 'applyCodeToFile', payload: { filePath, code } })
+            const done = document.createElement('span')
+            done.className = 'code-action-btn success'
+            done.textContent = '✓ נשמר'
+            wrapper.replaceWith(done)
+            setTimeout(() => { done.replaceWith(applyBtn); applyBtn._inputMode = false }, 2000)
+          }
+          okBtn.addEventListener('click', submit)
+          inp.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') submit()
+            if (ev.key === 'Escape') { wrapper.replaceWith(applyBtn); applyBtn._inputMode = false }
           })
-          applyBtn.textContent = '✓ נשמר'
-          applyBtn.classList.add('success')
-          setTimeout(() => {
-            applyBtn.textContent = 'שמור לקובץ'
-            applyBtn.classList.remove('success')
-          }, 2000)
         })
         actionsDiv.appendChild(applyBtn)
       }
@@ -606,10 +629,26 @@
       deleteBtn.title = 'מחק שיחה'
       deleteBtn.innerHTML =
         '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
+      let deleteClickedOnce = false
+      let deleteResetTimer = null
       deleteBtn.addEventListener('click', (e) => {
         e.stopPropagation()
-        const confirmed = confirm(`למחוק את "${conv.title}"?`)
-        if (!confirmed) return
+        if (!deleteClickedOnce) {
+          // First click: turn red + show "?" as confirmation hint
+          deleteClickedOnce = true
+          deleteBtn.style.opacity = '1'
+          deleteBtn.style.color = 'var(--vscode-errorForeground, #ef4444)'
+          deleteBtn.title = 'לחץ שוב למחיקה'
+          deleteResetTimer = setTimeout(() => {
+            deleteClickedOnce = false
+            deleteBtn.style.opacity = ''
+            deleteBtn.style.color = ''
+            deleteBtn.title = 'מחק שיחה'
+          }, 2000)
+          return
+        }
+        // Second click: actually delete
+        clearTimeout(deleteResetTimer)
         vscode.postMessage({
           type: 'deleteConversation',
           payload: { id: conv.id },
@@ -622,10 +661,7 @@
           closeHistoryPanel()
           return
         }
-        if (isStreaming) {
-          alert('המתן לסיום השיחה הנוכחית לפני מעבר')
-          return
-        }
+        if (isStreaming) return
         vscode.postMessage({
           type: 'switchConversation',
           payload: { id: conv.id },
